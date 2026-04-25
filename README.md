@@ -1,3 +1,13 @@
+---
+title: MutantHunter Train
+emoji: 🧬
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 8000
+---
+
 # MutantHunter
 
 An RL environment that teaches LLMs to write tests that actually catch bugs.
