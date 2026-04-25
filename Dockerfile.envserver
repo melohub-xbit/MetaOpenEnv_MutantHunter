@@ -2,7 +2,7 @@
 # Local: docker build -t mutant-hunter:latest -f Dockerfile .
 # HF Spaces (Docker SDK) sets PORT=7860; this image obeys it.
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

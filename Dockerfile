@@ -5,17 +5,27 @@ ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/data/hf-cache
 ENV WANDB_DIR=/data/wandb
 
+# Python 3.12 via deadsnakes (Ubuntu 22.04 ships 3.10 by default).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3-pip git curl ca-certificates \
+        software-properties-common ca-certificates curl \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3.12-dev \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
-    ln -sf /usr/bin/python3.11 /usr/bin/python3
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
+
+RUN ln -sf /usr/bin/python3.12 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3
 
 WORKDIR /app
 
 COPY pyproject.toml requirements.txt ./
-RUN pip install --no-cache-dir torch==2.11.0 --index-url https://download.pytorch.org/whl/cu124
+
+# Use a torch version that has cu124 wheels (2.4.0–2.6.0 confirmed available).
+RUN pip install --no-cache-dir 'torch>=2.4.0,<2.7.0' --index-url https://download.pytorch.org/whl/cu124
+
 RUN pip install --no-cache-dir bitsandbytes wandb
 
 COPY . .
