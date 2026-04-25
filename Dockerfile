@@ -8,16 +8,23 @@ ENV WANDB_CACHE_DIR=/data/wandb-cache
 ENV WANDB_CONFIG_DIR=/data/wandb-config
 ENV HOME=/tmp/home
 
-# Install only what's needed; use whatever python3 ships with the base
+# The CUDA base image ships no Python. Install 3.12 via deadsnakes,
+# then bootstrap pip with get-pip.py against that exact interpreter.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl ca-certificates \
+        software-properties-common ca-certificates curl git \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3.12-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify python3 exists; print version
-RUN python3 --version && python3 -m pip --version
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | /usr/bin/python3.12
 
-# Make `python` resolve to whatever `python3` is
-RUN ln -sf $(which python3) /usr/bin/python
+# Single Python everywhere: python, python3, pip all resolve to 3.12.
+RUN ln -sf /usr/bin/python3.12 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3
+
+# Sanity check — surfaces version mismatches in build logs immediately.
+RUN python3 --version && python3 -m pip --version && python --version
 
 WORKDIR /app
 
