@@ -40,7 +40,7 @@ trap push_partial ERR
 echo "=== Phase 0: setup ==="
 cd /tmp
 if [ ! -d MetaOpenEnv_MutantHunter ]; then
-    git clone https://github.com/jester1177/MetaOpenEnv_MutantHunter.git
+    git clone https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter.git
 fi
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
