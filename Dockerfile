@@ -37,8 +37,8 @@ RUN useradd --create-home --uid 1000 mutant \
     && chown -R mutant:mutant /app
 USER mutant
 
-EXPOSE 8000
-ENV PORT=8000
+EXPOSE 7860
+ENV PORT=7860
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -fsS http://localhost:${PORT}/health || exit 1
