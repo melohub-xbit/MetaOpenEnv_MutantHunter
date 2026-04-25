@@ -1,46 +1,26 @@
-# MutantHunter env server.
-# Local: docker build -t mutant-hunter:latest -f Dockerfile .
-# HF Spaces (Docker SDK) sets PORT=7860; this image obeys it.
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-FROM python:3.11-slim
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/data/hf-cache
+ENV WANDB_DIR=/data/wandb
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    MUTANT_HUNTER_HOME=/app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3-pip git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        git \
-        build-essential \
-        util-linux \
-        ca-certificates \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml requirements.txt ./
+RUN pip install --no-cache-dir torch==2.11.0 --index-url https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir bitsandbytes wandb
 
-COPY pyproject.toml README.md LICENSE ./
-COPY src/ ./src/
-COPY scripts/ ./scripts/
-COPY evaluation/ ./evaluation/
+COPY . .
+RUN pip install --no-cache-dir -e ".[training]"
 
-RUN pip install --no-cache-dir -e .
+RUN mkdir -p /data && chmod +x scripts/space_run_layers_6_7.sh
 
-# Pre-compute baselines so /reset is fast at runtime.
-RUN python scripts/precompute_baselines.py
-
-# Drop privileges. The agent's submitted test code runs in a further
-# subprocess sandbox (RLIMITs + unshare -n), but defense in depth.
-RUN useradd --create-home --uid 1000 mutant \
-    && chown -R mutant:mutant /app
-USER mutant
-
-EXPOSE 8000
-ENV PORT=8000
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD curl -fsS http://localhost:${PORT}/health || exit 1
-
-CMD ["sh", "-c", "uvicorn mutant_hunter.server.app:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["./scripts/space_run_layers_6_7.sh"]
