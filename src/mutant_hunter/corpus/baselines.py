@@ -123,7 +123,9 @@ def dotted_to_workspace_relpath(dotted: str) -> Path:
 
 
 def summarize_module(source: str) -> str:
-    """AST-derived summary: top-level signatures + first docstring line."""
+    """AST-derived summary: signatures with types/defaults, public methods,
+    and properties so the policy can use the API correctly without seeing
+    the full source."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -136,13 +138,105 @@ def summarize_module(source: str) -> str:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             out.append(f"def {node.name}{_arg_signature(node)}: ...")
         elif isinstance(node, ast.ClassDef):
-            out.append(f"class {node.name}: ...")
+            out.append(_render_class(node))
     return "\n".join(out)
 
 
+def _render_class(cls: ast.ClassDef) -> str:
+    """Emit class signature + public methods, properties, and dunders.
+
+    Private helpers (single-underscore, not dunder) are omitted to keep
+    the summary compact and to avoid teaching the policy to call them.
+    """
+    bases = []
+    for b in cls.bases:
+        try:
+            bases.append(ast.unparse(b))
+        except Exception:
+            bases.append("...")
+    header = f"class {cls.name}"
+    if bases:
+        header += "(" + ", ".join(bases) + ")"
+    header += ":"
+
+    lines: list[str] = []
+    cls_doc = ast.get_docstring(cls)
+    if cls_doc:
+        lines.append(f"    '''{cls_doc.splitlines()[0]}'''")
+    for item in cls.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = item.name
+            if name.startswith("_") and not (name.startswith("__") and name.endswith("__")):
+                continue  # skip private helpers, keep dunders
+            decos = [_deco_name(d) for d in item.decorator_list]
+            sig = _arg_signature(item)
+            ret = _ret_annotation(item)
+            for d in decos:
+                lines.append(f"    @{d}")
+            lines.append(f"    def {name}{sig}{ret}: ...")
+    if not lines:
+        lines.append("    ...")
+    return header + "\n" + "\n".join(lines)
+
+
+def _deco_name(d: ast.expr) -> str:
+    try:
+        return ast.unparse(d)
+    except Exception:
+        return "decorator"
+
+
 def _arg_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
-    args = [a.arg for a in node.args.args]
-    return "(" + ", ".join(args) + ")"
+    """Render a function signature with type annotations and default values."""
+    args = node.args
+    parts: list[str] = []
+    pos_args = list(args.args)
+    pos_defaults = list(args.defaults)
+    n_defaults = len(pos_defaults)
+    n_pos = len(pos_args)
+    for i, a in enumerate(pos_args):
+        s = a.arg
+        if a.annotation is not None:
+            try:
+                s += ": " + ast.unparse(a.annotation)
+            except Exception:
+                pass
+        default_idx = i - (n_pos - n_defaults)
+        if default_idx >= 0:
+            try:
+                s += " = " + ast.unparse(pos_defaults[default_idx])
+            except Exception:
+                pass
+        parts.append(s)
+    if args.vararg is not None:
+        parts.append("*" + args.vararg.arg)
+    elif args.kwonlyargs:
+        parts.append("*")
+    for a, d in zip(args.kwonlyargs, args.kw_defaults):
+        s = a.arg
+        if a.annotation is not None:
+            try:
+                s += ": " + ast.unparse(a.annotation)
+            except Exception:
+                pass
+        if d is not None:
+            try:
+                s += " = " + ast.unparse(d)
+            except Exception:
+                pass
+        parts.append(s)
+    if args.kwarg is not None:
+        parts.append("**" + args.kwarg.arg)
+    return "(" + ", ".join(parts) + ")"
+
+
+def _ret_annotation(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    if node.returns is None:
+        return ""
+    try:
+        return " -> " + ast.unparse(node.returns)
+    except Exception:
+        return ""
 
 
 def list_existing_tests(repo_dir_path: Path, test_dir: str = "tests") -> list[str]:

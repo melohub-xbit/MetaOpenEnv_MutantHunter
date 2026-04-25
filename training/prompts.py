@@ -23,101 +23,140 @@ class FewShot(TypedDict):
     completion: str
 
 
+# Phrased entirely in positive form. A previous version listed forbidden
+# imports (os/sys/subprocess/eval/exec); small Coder-instruct models read
+# that list as a recommended import list and regurgitated it. Negative
+# rules are now expressed as positive constraints.
 SYSTEM_PROMPT = """\
 You are MutantHunter, an expert at writing pytest unit tests that catch bugs.
 
-You will be given a Python module summary and the names of its existing
-tests. Your job is to write ADDITIONAL pytest tests that catch behaviors
-the existing suite misses — the kinds of small, plausible code mutations
-(off-by-one, flipped comparison, swapped operator, dropped early-return,
-constant changes) that a mutation tester would otherwise leave alive.
+You will be given a Python module's source (or summary) and the names of
+its existing tests. Your job is to write ADDITIONAL pytest tests that catch
+behaviors the existing suite misses — the kinds of small, plausible code
+mutations (off-by-one, flipped comparison, swapped operator, dropped
+early-return, constant changes) that a mutation tester would otherwise
+leave alive.
 
-Output format (strict):
+Output format:
 - Output ONLY the contents of a single pytest file.
-- Do NOT include markdown fences, prose, or commentary before/after.
-- Imports first, then test functions named ``test_*``.
+- No markdown fences, no prose, no commentary.
+- Imports first, then test functions named `test_*`.
 
-Rules:
-- All your tests MUST pass on the unmodified module (no regressions).
-- Do NOT import or use ``os``, ``sys``, ``subprocess``, ``eval``, ``exec``.
-- Do NOT touch the filesystem, network, or environment variables.
-- Each test should be a focused assertion on one behavior; keep tests
-  short (≤ 20 lines).
-- Prefer asserting exact return values, exact exception types, and
-  boundary inputs (0, 1, -1, empty, max-sized) over loose ``isinstance``
-  checks. Loose checks rarely kill mutants.
-- When a function has documented edge cases (errors, defaults, branches),
-  cover each branch with at least one targeted test.
+Imports policy:
+- Import only from the target module shown in the prompt.
+- `pytest` itself is allowed (use `pytest.raises` for exception assertions).
+- Standard-library helpers are allowed only when they are pure data types
+  used inside an assertion (e.g. `math.isclose` for float comparison).
+- Do not perform file, network, environment, or subprocess access.
+
+Test design:
+- All your tests MUST pass on the unmodified module.
+- Each test asserts one focused behavior; keep tests under ~20 lines.
+- Prefer exact return values, exact exception types, and boundary inputs
+  (0, 1, -1, empty, max-sized) over loose `isinstance` checks.
+- Use the public API exactly as the source defines it. Examples:
+    * If the class defines `__contains__`, write `x in obj`, not `obj.contains(x)`.
+    * If the class defines `__len__`, write `len(obj)`, not `obj.length()`.
+    * Use the exact constructor argument names shown in `__init__`.
+- Cover documented edge cases (errors, defaults, branches) — at least one
+  test per branch.
 """
 
 
+# A single class-based example that matches the corpus's shape: constructor
+# with kwargs, public methods, a property, an exception type, and the
+# `in` operator via __contains__. Function-only examples were poisoning
+# small models — they would copy the example verbatim instead of
+# generalizing the *style*.
 FEW_SHOT_EXAMPLES: list[FewShot] = [
     {
         "prompt": (
-            "Module: shop.discount\n"
-            "## Module summary\n"
-            "def apply_discount(price: float, pct: float) -> float:\n"
-            "    '''Return price reduced by pct percent. Raises ValueError\n"
-            "    if pct is outside [0, 100]. price < 0 also raises.'''\n"
+            "Module: ratelimit.bucket\n"
+            "## Module source\n"
+            "```python\n"
+            "class RateLimitError(ValueError):\n"
+            "    pass\n"
+            "\n"
+            "class TokenBucket:\n"
+            "    '''A capacity-limited bucket of tokens.'''\n"
+            "    def __init__(self, capacity: int, refill_per_sec: float = 1.0) -> None:\n"
+            "        if capacity <= 0:\n"
+            "            raise RateLimitError('capacity must be positive')\n"
+            "        if refill_per_sec <= 0:\n"
+            "            raise RateLimitError('refill rate must be positive')\n"
+            "        self._capacity = capacity\n"
+            "        self._refill = float(refill_per_sec)\n"
+            "        self._tokens = capacity\n"
+            "    @property\n"
+            "    def capacity(self) -> int:\n"
+            "        return self._capacity\n"
+            "    @property\n"
+            "    def available(self) -> int:\n"
+            "        return self._tokens\n"
+            "    def __contains__(self, count: int) -> bool:\n"
+            "        return count <= self._tokens\n"
+            "    def __len__(self) -> int:\n"
+            "        return self._tokens\n"
+            "    def consume(self, count: int = 1) -> None:\n"
+            "        if count <= 0:\n"
+            "            raise RateLimitError('count must be positive')\n"
+            "        if count > self._tokens:\n"
+            "            raise RateLimitError('insufficient tokens')\n"
+            "        self._tokens -= count\n"
+            "    def refill(self, count: int) -> None:\n"
+            "        self._tokens = min(self._capacity, self._tokens + count)\n"
+            "```\n"
             "## Existing tests\n"
-            "  - tests/test_discount.py::test_apply_discount_basic\n"
+            "  - tests/test_bucket.py::test_consume_one\n"
+            "  - tests/test_bucket.py::test_capacity_property\n"
         ),
         "completion": (
             "import pytest\n"
-            "from shop.discount import apply_discount\n"
+            "from ratelimit.bucket import TokenBucket, RateLimitError\n"
             "\n"
-            "def test_zero_percent_returns_input_price():\n"
-            "    assert apply_discount(100.0, 0.0) == 100.0\n"
+            "def test_new_bucket_starts_full():\n"
+            "    b = TokenBucket(capacity=5)\n"
+            "    assert b.available == 5\n"
+            "    assert len(b) == 5\n"
             "\n"
-            "def test_full_hundred_percent_returns_zero():\n"
-            "    assert apply_discount(50.0, 100.0) == 0.0\n"
+            "def test_in_operator_reflects_availability():\n"
+            "    b = TokenBucket(capacity=5)\n"
+            "    assert 5 in b\n"
+            "    assert 6 not in b\n"
             "\n"
-            "def test_negative_pct_raises_value_error():\n"
-            "    with pytest.raises(ValueError):\n"
-            "        apply_discount(10.0, -0.0001)\n"
+            "def test_consume_reduces_tokens_exactly():\n"
+            "    b = TokenBucket(capacity=10)\n"
+            "    b.consume(3)\n"
+            "    assert b.available == 7\n"
             "\n"
-            "def test_pct_above_one_hundred_raises_value_error():\n"
-            "    with pytest.raises(ValueError):\n"
-            "        apply_discount(10.0, 100.0001)\n"
+            "def test_consume_default_count_is_one():\n"
+            "    b = TokenBucket(capacity=4)\n"
+            "    b.consume()\n"
+            "    assert b.available == 3\n"
             "\n"
-            "def test_negative_price_raises_value_error():\n"
-            "    with pytest.raises(ValueError):\n"
-            "        apply_discount(-1.0, 10.0)\n"
+            "def test_consume_zero_raises():\n"
+            "    b = TokenBucket(capacity=4)\n"
+            "    with pytest.raises(RateLimitError):\n"
+            "        b.consume(0)\n"
             "\n"
-            "def test_half_off_exact_value():\n"
-            "    assert apply_discount(80.0, 50.0) == 40.0\n"
-        ),
-    },
-    {
-        "prompt": (
-            "Module: text.tokens\n"
-            "## Module summary\n"
-            "def count_words(s: str) -> int:\n"
-            "    '''Return number of whitespace-separated tokens. Empty\n"
-            "    string and whitespace-only strings return 0.'''\n"
-            "## Existing tests\n"
-            "  - tests/test_tokens.py::test_count_words_simple_sentence\n"
-        ),
-        "completion": (
-            "from text.tokens import count_words\n"
+            "def test_consume_more_than_available_raises():\n"
+            "    b = TokenBucket(capacity=2)\n"
+            "    with pytest.raises(RateLimitError):\n"
+            "        b.consume(3)\n"
             "\n"
-            "def test_empty_string_is_zero_words():\n"
-            "    assert count_words('') == 0\n"
+            "def test_refill_capped_at_capacity():\n"
+            "    b = TokenBucket(capacity=5)\n"
+            "    b.consume(2)\n"
+            "    b.refill(100)\n"
+            "    assert b.available == 5\n"
             "\n"
-            "def test_whitespace_only_is_zero_words():\n"
-            "    assert count_words('   \\t \\n ') == 0\n"
+            "def test_zero_capacity_rejected_at_construction():\n"
+            "    with pytest.raises(RateLimitError):\n"
+            "        TokenBucket(capacity=0)\n"
             "\n"
-            "def test_single_word_no_padding():\n"
-            "    assert count_words('hello') == 1\n"
-            "\n"
-            "def test_leading_and_trailing_whitespace_ignored():\n"
-            "    assert count_words('  one two  ') == 2\n"
-            "\n"
-            "def test_multiple_internal_spaces_collapse():\n"
-            "    assert count_words('a    b    c') == 3\n"
-            "\n"
-            "def test_tabs_and_newlines_are_separators():\n"
-            "    assert count_words('a\\tb\\nc') == 3\n"
+            "def test_negative_refill_rate_rejected():\n"
+            "    with pytest.raises(RateLimitError):\n"
+            "        TokenBucket(capacity=5, refill_per_sec=-1.0)\n"
         ),
     },
 ]
