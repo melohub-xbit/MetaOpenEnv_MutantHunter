@@ -1,3 +1,14 @@
+---
+title: MutantHunter Env
+emoji: 🧬
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 7860
+short_description: training LLMs to write tests via mutation-score rewards
+---
+
 # MutantHunter
 
 An RL environment that teaches LLMs to write tests that actually catch bugs.
