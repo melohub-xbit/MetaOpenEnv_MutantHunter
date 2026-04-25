@@ -80,6 +80,7 @@ class TrainingConfig:
     max_new_tokens: int
     seed: int
     output_dir: Path
+    wandb_project: str | None
 
 
 # --- Prompt construction ----------------------------------------------------
@@ -245,6 +246,11 @@ def make_prompt_dataset(env: MutantHunterEnvironment, n: int, seed_start: int):
 def run(cfg: TrainingConfig) -> int:
     random.seed(cfg.seed)
 
+    report_to: list[str] = []
+    if cfg.wandb_project:
+        os.environ["WANDB_PROJECT"] = cfg.wandb_project
+        report_to = ["wandb"]
+
     trl = _try_import("trl")
     if trl is None:
         raise RuntimeError(
@@ -274,7 +280,7 @@ def run(cfg: TrainingConfig) -> int:
         logging_steps=1,
         save_steps=max(1, cfg.steps),
         save_strategy="steps",
-        report_to=[],
+        report_to=report_to,
         seed=cfg.seed,
     )
     # Older TRL versions accept max_prompt_length; newer ones drop it.
@@ -308,6 +314,8 @@ def main() -> int:
     ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--output-dir", type=str, default="./training/_runs/grpo")
+    ap.add_argument("--wandb-project", type=str, default=None,
+                    help="Weights & Biases project name. If set, reports to wandb.")
     ap.add_argument("--no-unsloth", action="store_true",
                     help="Skip the Unsloth path (use plain transformers + peft).")
     ap.add_argument("--no-4bit", action="store_true",
@@ -331,6 +339,7 @@ def main() -> int:
         max_new_tokens=args.max_new_tokens,
         seed=args.seed,
         output_dir=out,
+        wandb_project=args.wandb_project,
     )
 
     # Persist the final config so eval_harness / write-up can reference it.

@@ -24,6 +24,8 @@ Run:
 from __future__ import annotations
 
 import argparse
+import json
+import statistics
 import sys
 from pathlib import Path
 
@@ -90,11 +92,66 @@ POLICIES = {
 }
 
 
+def _report_to_zero_shot_shape(report: EvalReport) -> dict:
+    """Reshape an EvalReport into the same JSON shape produced by
+    ``evaluation/zero_shot_distribution.py`` so ``make_plots.py`` can consume
+    it via ``--baseline-heuristic-json``.
+    """
+    rows: list[dict] = []
+    for ep in report.episodes:
+        comps = dict(ep.components or {})
+        comps["no_regression_gate"] = ep.no_regression_gate
+        rows.append({
+            "seed": ep.seed,
+            "repo": ep.repo,
+            "module": ep.module,
+            "total_reward": ep.reward,
+            "final_reward": ep.reward,
+            "components": {
+                "mutation_kill": float(comps.get("mutation_kill", 0.0) or 0.0),
+                "coverage_delta": float(comps.get("coverage_delta", 0.0) or 0.0),
+                "format": float(comps.get("format", 0.0) or 0.0),
+                "parsimony": float(comps.get("parsimony", 0.0) or 0.0),
+                "no_regression_gate": ep.no_regression_gate,
+            },
+            "no_regression_gate": ep.no_regression_gate,
+            "episode_length": ep.turns,
+        })
+
+    rewards = [r["total_reward"] for r in rows]
+    n = len(rewards)
+    mean_r = statistics.mean(rewards) if rewards else 0.0
+    median_r = statistics.median(rewards) if rewards else 0.0
+    std_r = statistics.pstdev(rewards) if len(rewards) > 1 else 0.0
+    min_r = min(rewards) if rewards else 0.0
+    max_r = max(rewards) if rewards else 0.0
+    frac_above = sum(1 for r in rewards if r > 0.3) / n if n else 0.0
+    frac_fmt_zero = sum(1 for r in rows if r["components"]["format"] == 0.0) / n if n else 0.0
+    frac_gate_fired = (
+        sum(1 for r in rows if (r["no_regression_gate"] or 0.0) > 0.0) / n if n else 0.0
+    )
+    summary = {
+        "mean_reward": mean_r,
+        "median_reward": median_r,
+        "std_reward": std_r,
+        "min_reward": min_r,
+        "max_reward": max_r,
+        "n_episodes": n,
+        "fraction_above_0_3": frac_above,
+        "fraction_format_zero": frac_fmt_zero,
+        "fraction_gate_fired": frac_gate_fired,
+    }
+    return {"summary": summary, "episodes": rows}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--episodes", type=int, default=3)
     ap.add_argument("--seed-start", type=int, default=0)
     ap.add_argument("--policy", type=str, default="always_pass", choices=sorted(POLICIES))
+    ap.add_argument("--out", type=str, default=None,
+                    help="If set, write a JSON report to this path "
+                         "(same shape as evaluation/zero_shot_distribution.py).")
     args = ap.parse_args()
 
     policy = POLICIES[args.policy]
@@ -106,6 +163,13 @@ def main() -> int:
     )
     print(f"\npolicy={args.policy} mean_reward={report.mean_reward:.4f} "
           f"median_reward={report.median_reward:.4f}")
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = _report_to_zero_shot_shape(report)
+        out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote {out_path}")
     return 0
 
 

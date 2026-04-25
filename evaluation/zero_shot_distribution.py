@@ -76,6 +76,12 @@ def main() -> int:
         default="auto",
         help="'auto' | 'cuda' | 'cpu' — auto picks cuda when available else cpu",
     )
+    ap.add_argument(
+        "--lora-path",
+        type=str,
+        default=None,
+        help="If set, load a PEFT LoRA adapter from this path on top of --model.",
+    )
     args = ap.parse_args()
 
     try:
@@ -102,6 +108,14 @@ def main() -> int:
     try:
         tokenizer = AutoTokenizer.from_pretrained(args.model)
         model = AutoModelForCausalLM.from_pretrained(args.model)
+        if args.lora_path:
+            try:
+                from peft import PeftModel
+            except ImportError as exc:
+                print(f"[layer6] FAIL — --lora-path set but peft not installed: {exc}")
+                return 1
+            print(f"[layer6] attaching LoRA adapter from {args.lora_path} ...", flush=True)
+            model = PeftModel.from_pretrained(model, args.lora_path)
         model = model.to(device)
         model.eval()
     except Exception as exc:
