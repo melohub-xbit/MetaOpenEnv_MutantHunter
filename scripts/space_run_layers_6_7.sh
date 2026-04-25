@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Catch any failure and idle instead of exiting — exiting triggers HF restart loop.
+trap 'echo "[ERROR] Script failed at line $LINENO. Idling instead of restarting."; while true; do sleep 300; done' ERR
+
 # HF Spaces runs as non-root; ensure HOME points to writable space
 export HOME="${HOME:-/data}"
 if [ ! -w "$HOME" ]; then
-    export HOME=/tmp
+    export HOME=/tmp/home
 fi
 mkdir -p "$HOME"
 echo "Using HOME=$HOME"
@@ -99,12 +102,14 @@ if [ -d evaluation/_results ]; then
     cp -rv evaluation/_results/* /data/results/ || true
 fi
 
-echo "=== ALL DONE ==="
+echo ""
+echo "==========================================="
+echo "ALL LAYERS COMPLETE — script entering idle"
+echo "==========================================="
 echo "Logs and JSON in /data/results/"
-ls -la /data/results/
-
-# Brief sleep so the Space stays alive long enough to grab logs.
-# /data is persistent storage, so files survive even if Space restarts.
-echo "Sleeping 90 seconds for log retrieval..."
-sleep 90
-echo "Exiting. Switch hardware to CPU basic NOW to stop billing."
+ls -la /data/results/ || true
+echo ""
+echo "MANUALLY SWITCH HARDWARE TO CPU BASIC NOW TO STOP BILLING"
+echo ""
+# Sleep forever to prevent restart loop. Switch hardware to CPU to actually stop.
+while true; do sleep 300; echo "[$(date)] Idle, waiting for hardware downgrade..."; done
