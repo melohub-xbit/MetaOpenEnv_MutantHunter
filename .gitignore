@@ -1,0 +1,88 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# --- Build / dist ---
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.eggs/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Test / coverage ---
+.pytest_cache/
+.cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE / editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Project-specific ---
+# OpenEnv reference checkout (kept as an external repo, not vendored).
+OpenEnv/
+
+
+# Cloned upstream corpus repos. Vendored local mini-libs under _local/ are tracked.
+src/mutant_hunter/corpus/_cache/
+
+# Mutation engine and per-episode scratch.
+.mutmut-cache
+.mutmut_cache
+mutants/
+/tmp/mutant_hunter_episode_*/
+
+# Training artifacts.
+checkpoints/
+final-lora/
+runs/
+wandb/
+logs/
+outputs/
+
+# Local rollout dumps.
+training/rollouts/
+evaluation/results/
+
+# Plots are committed; PNG sources from local sweeps are not.
+plots/_scratch/
+
+# Notebook checkpoints.
+.ipynb_checkpoints/
+
+# Secrets (defense-in-depth — never commit any of these).
+.env
+.env.*
+*.pem
+*.key
+secrets.yaml
+secrets.yml
+
+# Hugging Face / W&B caches that may end up in the repo by accident.
+.huggingface/
+.wandb/
+
+training/_runs/
+evaluation/_results/

@@ -1,0 +1,5 @@
+{
+  "version": "v1",
+  "description": "Deterministic eval episodes used for baseline-vs-trained comparisons. Populated by scripts/precompute_baselines.py once mutation baselines are computed for each (repo, module). NEVER trained on.",
+  "episodes": []
+}

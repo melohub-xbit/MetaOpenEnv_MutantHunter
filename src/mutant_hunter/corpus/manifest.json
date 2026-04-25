@@ -1,0 +1,81 @@
+{
+  "version": "v1",
+  "repos": [
+    {
+      "name": "mini_calendar",
+      "source": "local",
+      "path": "_local/mini_calendar",
+      "commit": null,
+      "license": "Apache-2.0",
+      "modules": [
+        {
+          "module": "mini_calendar.parser",
+          "loc": 257,
+          "baseline_mutation_score": 0.514881,
+          "total_mutants": 336,
+          "surviving_mutants": 163,
+          "coverage_baseline": 78.5714,
+          "difficulty_tier": 1,
+          "test_dir": "tests"
+        }
+      ]
+    },
+    {
+      "name": "csv_normalizer",
+      "source": "local",
+      "path": "_local/csv_normalizer",
+      "commit": null,
+      "license": "Apache-2.0",
+      "modules": [
+        {
+          "module": "csv_normalizer.normalizer",
+          "loc": 300,
+          "baseline_mutation_score": 0.666667,
+          "total_mutants": 108,
+          "surviving_mutants": 36,
+          "coverage_baseline": 77.8547,
+          "difficulty_tier": 1,
+          "test_dir": "tests"
+        }
+      ]
+    },
+    {
+      "name": "interval_tree",
+      "source": "local",
+      "path": "_local/interval_tree",
+      "commit": null,
+      "license": "Apache-2.0",
+      "modules": [
+        {
+          "module": "interval_tree.tree",
+          "loc": 154,
+          "baseline_mutation_score": 0.42,
+          "total_mutants": 50,
+          "surviving_mutants": 29,
+          "coverage_baseline": 77.8689,
+          "difficulty_tier": 2,
+          "test_dir": "tests"
+        }
+      ]
+    },
+    {
+      "name": "bloom_filter_lite",
+      "source": "local",
+      "path": "_local/bloom_filter_lite",
+      "commit": null,
+      "license": "Apache-2.0",
+      "modules": [
+        {
+          "module": "bloom_filter_lite.bloom",
+          "loc": 186,
+          "baseline_mutation_score": 0.333333,
+          "total_mutants": 84,
+          "surviving_mutants": 56,
+          "coverage_baseline": 78.7097,
+          "difficulty_tier": 2,
+          "test_dir": "tests"
+        }
+      ]
+    }
+  ]
+}

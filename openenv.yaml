@@ -1,0 +1,6 @@
+spec_version: 1
+name: mutant_hunter
+type: space
+runtime: fastapi
+app: mutant_hunter.server.app:app
+port: 8000
