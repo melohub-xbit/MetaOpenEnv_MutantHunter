@@ -10,7 +10,10 @@ mkdir -p /data/results
 
 # Auth
 if [ -n "${HF_TOKEN:-}" ]; then
-    huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+    # New CLI (huggingface_hub >= 1.0)
+    hf auth login --token "$HF_TOKEN" --add-to-git-credential 2>/dev/null \
+    || python -c "from huggingface_hub import login; login(token='$HF_TOKEN', add_to_git_credential=True)" \
+    || echo "WARN: HF login failed, model download may still work for public models"
 fi
 if [ -n "${WANDB_API_KEY:-}" ]; then
     wandb login "$WANDB_API_KEY"
