@@ -46,8 +46,6 @@ cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
 python -c "import torch; assert torch.cuda.is_available(), 'No CUDA available in base image'; print(f'Using pre-installed torch {torch.__version__}, CUDA {torch.version.cuda}')"
-# Align torchvision ABI with the pre-installed torch from the base image
-pip install --no-cache-dir torchvision --upgrade --index-url https://download.pytorch.org/whl/cu124
 pip install --no-cache-dir -e ".[training]"
 pip install --no-cache-dir bitsandbytes wandb
 

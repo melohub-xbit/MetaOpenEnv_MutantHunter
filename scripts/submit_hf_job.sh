@@ -17,5 +17,5 @@ hf jobs run \
     --timeout 6h \
     --secrets HF_TOKEN \
     --secrets "WANDB_API_KEY=${WANDB_API_KEY}" \
-    pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel \
+    pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel \
     bash -c 'apt-get update && apt-get install -y --no-install-recommends git curl && curl -fsSL https://raw.githubusercontent.com/melohub-xbit/MetaOpenEnv_MutantHunter/main/scripts/run_hf_job.sh | bash'
