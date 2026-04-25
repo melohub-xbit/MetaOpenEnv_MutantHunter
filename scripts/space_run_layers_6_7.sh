@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# HF Spaces runs as non-root; ensure HOME points to writable space
+export HOME="${HOME:-/data}"
+if [ ! -w "$HOME" ]; then
+    export HOME=/tmp
+fi
+mkdir -p "$HOME"
+echo "Using HOME=$HOME"
+
 echo "=== MutantHunter Layer 6/7 GPU Run ==="
 date
 nvidia-smi || echo "WARN: nvidia-smi failed"
@@ -8,16 +16,38 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); 
 
 mkdir -p /data/results
 
-# Auth
+# Auth — best-effort. A non-fatal warning here must not kill the script.
+set +e
+
 if [ -n "${HF_TOKEN:-}" ]; then
-    # New CLI (huggingface_hub >= 1.0)
-    hf auth login --token "$HF_TOKEN" --add-to-git-credential 2>/dev/null \
-    || python -c "from huggingface_hub import login; login(token='$HF_TOKEN', add_to_git_credential=True)" \
-    || echo "WARN: HF login failed, model download may still work for public models"
+    hf auth login --token "$HF_TOKEN" 2>/dev/null \
+    || python -c "from huggingface_hub import login; login(token='$HF_TOKEN', add_to_git_credential=False)" \
+    || echo "WARN: HF login failed, continuing (Qwen2.5-Coder-1.5B is public)"
 fi
+
 if [ -n "${WANDB_API_KEY:-}" ]; then
-    wandb login "$WANDB_API_KEY"
+    # Use Python API instead of `wandb login` CLI to avoid /.netrc permission error
+    python -c "
+import os
+os.environ['WANDB_API_KEY'] = '$WANDB_API_KEY'
+os.environ.setdefault('WANDB_DIR', '/data/wandb')
+os.environ.setdefault('WANDB_CACHE_DIR', '/data/wandb-cache')
+os.environ.setdefault('WANDB_CONFIG_DIR', '/data/wandb-config')
+os.makedirs(os.environ['WANDB_DIR'], exist_ok=True)
+os.makedirs(os.environ['WANDB_CACHE_DIR'], exist_ok=True)
+os.makedirs(os.environ['WANDB_CONFIG_DIR'], exist_ok=True)
+import wandb
+wandb.login(key='$WANDB_API_KEY', verify=True)
+print('W&B login OK')
+" || echo "WARN: W&B login failed, training will skip W&B logging"
 fi
+
+export WANDB_API_KEY="${WANDB_API_KEY:-}"
+export WANDB_DIR=/data/wandb
+export WANDB_CACHE_DIR=/data/wandb-cache
+export WANDB_CONFIG_DIR=/data/wandb-config
+
+set -e
 
 # Pre-cache model
 echo "=== Caching Qwen2.5-Coder-1.5B-Instruct ==="

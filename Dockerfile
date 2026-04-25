@@ -31,6 +31,8 @@ RUN pip install --no-cache-dir bitsandbytes wandb
 COPY . .
 RUN pip install --no-cache-dir -e ".[training]"
 
-RUN mkdir -p /data && chmod +x scripts/space_run_layers_6_7.sh
+RUN mkdir -p /data /data/hf-cache /data/wandb /data/wandb-cache /data/wandb-config /tmp/home \
+    && chmod -R 777 /data /tmp/home \
+    && chmod +x scripts/space_run_layers_6_7.sh
 
 CMD ["./scripts/space_run_layers_6_7.sh"]
