@@ -38,6 +38,10 @@ RUN python3 -m pip install --no-cache-dir -e ".[training]"
 RUN mkdir -p /data /data/hf-cache /data/wandb /data/wandb-cache /data/wandb-config /tmp/home \
     && chmod -R 777 /data /tmp/home
 
+# /app was COPYed as root; non-root runtime user needs write access for
+# evaluation/_results, training/_runs, and any other in-tree artifact paths.
+RUN chmod -R 777 /app
+
 RUN chmod +x scripts/space_run_layers_6_7.sh
 
 CMD ["./scripts/space_run_layers_6_7.sh"]
