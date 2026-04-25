@@ -4,6 +4,31 @@ set -euo pipefail
 # Catch any failure and idle instead of exiting — exiting triggers HF restart loop.
 trap 'echo "[ERROR] Script failed at line $LINENO. Idling instead of restarting."; while true; do sleep 300; done' ERR
 
+# Diagnostic mode: dump /data/results/* to stdout and exit, no GPU work.
+# Set DUMP_RESULTS_AND_EXIT=1 as a Space variable, switch hardware to CPU
+# basic, then Factory rebuild. /data is persistent storage so prior-run
+# artifacts survive. Logs are fetched via fetch_space_logs.
+if [ "${DUMP_RESULTS_AND_EXIT:-0}" = "1" ]; then
+    echo "=== DUMP MODE: /data/results/ ==="
+    ls -la /data/ 2>&1 || true
+    ls -la /data/results/ 2>&1 || true
+    for f in /data/results/*; do
+        if [ -f "$f" ]; then
+            echo ""
+            echo "=========================================="
+            echo "FILE: $f ($(wc -c < "$f") bytes)"
+            echo "=========================================="
+            cat "$f"
+            echo ""
+            echo "=========================================="
+            echo "END FILE: $f"
+            echo "=========================================="
+        fi
+    done
+    echo "=== DUMP COMPLETE ==="
+    exit 0
+fi
+
 # HF Spaces runs as non-root; ensure HOME points to writable space
 export HOME="${HOME:-/data}"
 if [ ! -w "$HOME" ]; then
