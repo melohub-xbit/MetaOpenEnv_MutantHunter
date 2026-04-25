@@ -64,14 +64,7 @@ if str(SRC) not in sys.path:
 
 from mutant_hunter.models import Action, Observation  # noqa: E402
 from mutant_hunter.server.mutant_hunter_environment import MutantHunterEnvironment  # noqa: E402
-
-
-SYSTEM_PROMPT = """\
-You are a Python test engineer. You will be shown a module and its existing
-test suite. Your task: write a pytest file that maximises the mutation kill
-rate on the module without breaking any existing test. Output ONLY the
-pytest file contents — no commentary, no markdown fences.
-"""
+from training.prompts import SYSTEM_PROMPT, render_few_shot  # noqa: E402
 
 
 @dataclass
@@ -96,6 +89,10 @@ def build_prompt(obs: Observation) -> str:
     parts = [
         SYSTEM_PROMPT,
         "",
+        "## Few-shot examples",
+        render_few_shot(),
+        "",
+        "## Live task",
         f"Module: {obs.module_path}",
         f"Repo:   {obs.repo_name}",
         f"Baseline mutation score: {obs.baseline_mutation_score:.3f}",
