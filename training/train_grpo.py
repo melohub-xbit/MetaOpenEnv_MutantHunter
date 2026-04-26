@@ -380,6 +380,12 @@ def run(cfg: TrainingConfig) -> int:
         learning_rate=cfg.learning_rate,
         max_steps=cfg.steps,
         max_completion_length=cfg.max_new_tokens,
+        # Rollout sampling: keep generations close to what the zero-shot eval
+        # used. The TRL default (~1.0) produced too much malformed/truncated
+        # pytest, pinning rewards at 0 even after the seed-routing fix.
+        temperature=0.7,
+        top_p=0.95,
+        top_k=50,
         bf16=False,
         fp16=False,
         logging_steps=1,
