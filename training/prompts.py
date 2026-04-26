@@ -30,12 +30,23 @@ class FewShot(TypedDict):
 SYSTEM_PROMPT = """\
 You are MutantHunter, an expert at writing pytest unit tests that catch bugs.
 
-You will be given a Python module's source (or summary) and the names of
-its existing tests. Your job is to write ADDITIONAL pytest tests that catch
+You will be given the FULL source of a Python module and the names of its
+existing tests. Your job is to write ADDITIONAL pytest tests that catch
 behaviors the existing suite misses — the kinds of small, plausible code
 mutations (off-by-one, flipped comparison, swapped operator, dropped
 early-return, constant changes) that a mutation tester would otherwise
 leave alive.
+
+Grounding (the most important rule):
+- Tests MUST pass on the unmodified source code shown in the prompt.
+- READ THE ACTUAL IMPLEMENTATION before deciding what to assert. Match the
+  existing behavior exactly. DO NOT guess what a function should return
+  from its name or signature.
+- If the source raises ValueError on bad input, your test must expect
+  ValueError — not TypeError, not RuntimeError, not "no exception".
+- If the source returns 0 for an empty case, your test must assert == 0,
+  not > 0, not None, not raises.
+- A test that fails on the unmodified source is worse than no test.
 
 Output format:
 - Output ONLY the contents of a single pytest file.
@@ -50,7 +61,6 @@ Imports policy:
 - Do not perform file, network, environment, or subprocess access.
 
 Test design:
-- All your tests MUST pass on the unmodified module.
 - Each test asserts one focused behavior; keep tests under ~20 lines.
 - Prefer exact return values, exact exception types, and boundary inputs
   (0, 1, -1, empty, max-sized) over loose `isinstance` checks.
@@ -157,6 +167,117 @@ FEW_SHOT_EXAMPLES: list[FewShot] = [
             "def test_negative_refill_rate_rejected():\n"
             "    with pytest.raises(RateLimitError):\n"
             "        TokenBucket(capacity=5, refill_per_sec=-1.0)\n"
+        ),
+    },
+    # Second example: one of the actual corpus modules (mini_calendar). The
+    # point is to show the policy that when full source is shown, every
+    # assertion in the test mirrors a concrete behavior in the source —
+    # exact exception type (ValueError), exact return value (a tuple, not a
+    # date object), exact bounds (1..9999), exact day-of-week convention
+    # (Mon=0). The test passes on this source verbatim.
+    {
+        "prompt": (
+            "Module: mini_calendar.parser\n"
+            "## Module source\n"
+            "```python\n"
+            "from typing import Tuple\n"
+            "Date = Tuple[int, int, int]\n"
+            "MIN_YEAR = 1\n"
+            "MAX_YEAR = 9999\n"
+            "_MONTH_DAYS_NORMAL = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)\n"
+            "\n"
+            "def is_leap_year(year: int) -> bool:\n"
+            "    if year % 4 != 0:\n"
+            "        return False\n"
+            "    if year % 100 != 0:\n"
+            "        return True\n"
+            "    return year % 400 == 0\n"
+            "\n"
+            "def days_in_month(year: int, month: int) -> int:\n"
+            "    if month < 1 or month > 12:\n"
+            "        raise ValueError(f'month must be in 1..12, got {month}')\n"
+            "    if month == 2 and is_leap_year(year):\n"
+            "        return 29\n"
+            "    return _MONTH_DAYS_NORMAL[month - 1]\n"
+            "\n"
+            "def is_valid_date(year: int, month: int, day: int) -> bool:\n"
+            "    if year < MIN_YEAR or year > MAX_YEAR:\n"
+            "        return False\n"
+            "    if month < 1 or month > 12:\n"
+            "        return False\n"
+            "    if day < 1 or day > days_in_month(year, month):\n"
+            "        return False\n"
+            "    return True\n"
+            "\n"
+            "def parse_iso_date(s: str) -> Date:\n"
+            "    if not isinstance(s, str):\n"
+            "        raise TypeError(f'parse_iso_date expects str, got {type(s).__name__}')\n"
+            "    if len(s) != 10:\n"
+            "        raise ValueError(f'expected 10 chars (YYYY-MM-DD), got {len(s)}')\n"
+            "    if s[4] != '-' or s[7] != '-':\n"
+            "        raise ValueError(f'expected dashes at positions 4 and 7, got {s!r}')\n"
+            "    year, month, day = int(s[0:4]), int(s[5:7]), int(s[8:10])\n"
+            "    if not is_valid_date(year, month, day):\n"
+            "        raise ValueError(f'invalid date: {year:04d}-{month:02d}-{day:02d}')\n"
+            "    return (year, month, day)\n"
+            "```\n"
+            "## Existing tests\n"
+            "  - tests/test_parser.py::test_is_leap_year_2000\n"
+            "  - tests/test_parser.py::test_parse_iso_date_happy_path\n"
+        ),
+        "completion": (
+            "import pytest\n"
+            "from mini_calendar.parser import (\n"
+            "    is_leap_year, days_in_month, is_valid_date, parse_iso_date,\n"
+            "    MIN_YEAR, MAX_YEAR,\n"
+            ")\n"
+            "\n"
+            "def test_century_not_div_400_is_not_leap():\n"
+            "    assert is_leap_year(1900) is False\n"
+            "\n"
+            "def test_year_div_4_not_div_100_is_leap():\n"
+            "    assert is_leap_year(2024) is True\n"
+            "\n"
+            "def test_days_in_february_leap_is_29():\n"
+            "    assert days_in_month(2024, 2) == 29\n"
+            "\n"
+            "def test_days_in_february_non_leap_is_28():\n"
+            "    assert days_in_month(2023, 2) == 28\n"
+            "\n"
+            "def test_days_in_month_zero_raises_value_error():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        days_in_month(2024, 0)\n"
+            "\n"
+            "def test_days_in_month_thirteen_raises_value_error():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        days_in_month(2024, 13)\n"
+            "\n"
+            "def test_is_valid_date_year_below_min_is_false():\n"
+            "    assert is_valid_date(MIN_YEAR - 1, 1, 1) is False\n"
+            "\n"
+            "def test_is_valid_date_year_above_max_is_false():\n"
+            "    assert is_valid_date(MAX_YEAR + 1, 1, 1) is False\n"
+            "\n"
+            "def test_parse_iso_date_returns_tuple_not_date_object():\n"
+            "    result = parse_iso_date('2024-02-29')\n"
+            "    assert result == (2024, 2, 29)\n"
+            "    assert isinstance(result, tuple)\n"
+            "\n"
+            "def test_parse_iso_date_non_string_raises_type_error():\n"
+            "    with pytest.raises(TypeError):\n"
+            "        parse_iso_date(20240229)\n"
+            "\n"
+            "def test_parse_iso_date_wrong_length_raises_value_error():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        parse_iso_date('2024-2-29')\n"
+            "\n"
+            "def test_parse_iso_date_missing_dash_raises_value_error():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        parse_iso_date('2024/02/29')\n"
+            "\n"
+            "def test_parse_iso_date_invalid_calendar_date_raises_value_error():\n"
+            "    with pytest.raises(ValueError):\n"
+            "        parse_iso_date('2023-02-29')\n"
         ),
     },
 ]

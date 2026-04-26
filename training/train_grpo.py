@@ -62,6 +62,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from mutant_hunter.corpus import dotted_to_workspace_relpath, repo_dir  # noqa: E402
 from mutant_hunter.models import Action, Observation  # noqa: E402
 from mutant_hunter.server.mutant_hunter_environment import MutantHunterEnvironment  # noqa: E402
 from training.prompts import SYSTEM_PROMPT, render_few_shot  # noqa: E402
@@ -86,7 +87,26 @@ class TrainingConfig:
 # --- Prompt construction ----------------------------------------------------
 
 
+def _read_module_source(obs: Observation) -> str | None:
+    """Best-effort read of the target module's full source from the local
+    corpus. Returns None if the file cannot be located or read; callers
+    fall back to ``obs.module_summary`` in that case."""
+    if not obs.repo_name or not obs.module_path:
+        return None
+    try:
+        path = repo_dir(obs.repo_name) / dotted_to_workspace_relpath(obs.module_path)
+        return path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+
+
 def build_prompt(obs: Observation) -> str:
+    full_source = _read_module_source(obs)
+    if full_source is not None:
+        source_section = ["## Module source", "```python", full_source.rstrip(), "```"]
+    else:
+        source_section = ["## Module summary", obs.module_summary or "(no summary)"]
+
     parts = [
         SYSTEM_PROMPT,
         "",
@@ -98,8 +118,7 @@ def build_prompt(obs: Observation) -> str:
         f"Repo:   {obs.repo_name}",
         f"Baseline mutation score: {obs.baseline_mutation_score:.3f}",
         "",
-        "## Module summary",
-        obs.module_summary or "(no summary)",
+        *source_section,
         "",
         "## Existing tests",
     ]

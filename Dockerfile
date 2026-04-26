@@ -28,8 +28,10 @@ COPY evaluation/ ./evaluation/
 
 RUN pip install --no-cache-dir -e .
 
-# Pre-compute baselines so /reset is fast at runtime.
-RUN python scripts/precompute_baselines.py
+# Baselines are committed under src/mutant_hunter/corpus/_baselines/ and
+# copied in by `COPY src/ ./src/` above. --skip-existing makes this a no-op
+# when the cache is present, but still self-heals if a baseline is missing.
+RUN python scripts/precompute_baselines.py --skip-existing
 
 # Drop privileges. The agent's submitted test code runs in a further
 # subprocess sandbox (RLIMITs + unshare -n), but defense in depth.
