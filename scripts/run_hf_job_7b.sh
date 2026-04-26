@@ -166,6 +166,21 @@ PY
 fi
 
 # ==============================================================================
+# Phase 2.5: GRPO inference smoke test (~5 min on GPU)
+# Catches malformed-pytest / truncation issues with the new sampling config
+# BEFORE we burn ~4h on GRPO training.
+# ==============================================================================
+echo "=== Phase 2.5: GRPO inference smoke test ==="
+python training/smoke_grpo_inference.py \
+    --model Qwen/Qwen2.5-Coder-7B-Instruct \
+    --n-completions 5 \
+    --episode-seed 42 \
+    --temperature 0.3 \
+    --top-p 0.9 \
+    --max-new-tokens 2048 \
+    --device auto
+
+# ==============================================================================
 # Phase 3: GRPO training (~4h)
 # ==============================================================================
 echo "=== Phase 3: GRPO training ==="
@@ -173,7 +188,7 @@ python training/train_grpo.py \
     --steps 80 \
     --rollouts-per-step 3 \
     --base-model Qwen/Qwen2.5-Coder-7B-Instruct \
-    --max-new-tokens 1024 \
+    --max-new-tokens 2048 \
     --learning-rate 5e-6 \
     --seed 42 \
     --no-unsloth \

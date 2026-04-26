@@ -380,11 +380,11 @@ def run(cfg: TrainingConfig) -> int:
         learning_rate=cfg.learning_rate,
         max_steps=cfg.steps,
         max_completion_length=cfg.max_new_tokens,
-        # Rollout sampling: keep generations close to what the zero-shot eval
-        # used. The TRL default (~1.0) produced too much malformed/truncated
-        # pytest, pinning rewards at 0 even after the seed-routing fix.
-        temperature=0.7,
-        top_p=0.95,
+        # Rollout sampling: temp=0.7 still produced too much malformed pytest
+        # at 1024 max_new_tokens. Drop to 0.3 + bump tokens to 2048 so the
+        # model has both the determinism and the room to finish a coherent file.
+        temperature=0.3,
+        top_p=0.9,
         top_k=50,
         bf16=False,
         fp16=False,
@@ -422,7 +422,7 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=10)
     ap.add_argument("--rollouts-per-step", type=int, default=2)
     ap.add_argument("--learning-rate", type=float, default=5e-6)
-    ap.add_argument("--max-new-tokens", type=int, default=512)
+    ap.add_argument("--max-new-tokens", type=int, default=2048)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--output-dir", type=str, default="./training/_runs/grpo")
     ap.add_argument("--wandb-project", type=str, default=None,
