@@ -16,6 +16,7 @@ Pass criteria:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import statistics
@@ -97,6 +98,221 @@ RESULTS_DIR = ROOT / "evaluation" / "_results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# --- Inference-time self-correction ---------------------------------------
+
+_FORBIDDEN_PATTERNS = (
+    "subprocess",
+    "os.system",
+    "eval(",
+    "exec(",
+    "__import__",
+    "socket.",
+    "open(",  # File access at module-import time is a no-regression risk;
+              # the env's sandbox blocks it but a forbidden-pattern hint
+              # short-circuits a wasted env step.
+)
+
+
+def validate_test_code_structure(text: str) -> str | None:
+    """Return None if ``text`` is a plausible pytest file, else a human-
+    readable error message describing why it isn't.
+
+    This runs BEFORE the env step so a structurally invalid completion can be
+    fed back to the model without paying the env-eval cost (~30s+)."""
+    if not text or not text.strip():
+        return "empty output"
+    if "def test_" not in text:
+        return "no test_* function found"
+    try:
+        ast.parse(text)
+    except SyntaxError as e:
+        return f"syntax error: {e.msg}"
+    for f in _FORBIDDEN_PATTERNS:
+        if f in text:
+            return f"forbidden pattern: {f}"
+    return None
+
+
+def extract_failure_reason(components: dict, gate: float | None) -> str:
+    """Map env reward components to a single hint to feed back to the model."""
+    if gate == 0 or gate == 0.0:
+        return ("Your tests broke the unmodified source code "
+                "(no_regression_gate failed). Make sure each test passes on "
+                "the original implementation as shown in the prompt.")
+    if components.get("format", 1.0) == 0:
+        return "Output had format issues. Use valid pytest syntax with `assert` statements."
+    if components.get("mutation_kill", 0.0) == 0:
+        return "Tests didn't kill any mutations. Add edge-case tests targeting boundaries."
+    return "Tests scored 0 — re-read the source carefully and try again."
+
+
+def build_retry_suffix(error_history: list[tuple[str, str]]) -> str:
+    """Construct a feedback addendum that nudges the model toward a correction
+    on its next attempt. Only the most recent failure is shown — earlier
+    failures pile up tokens without adding signal."""
+    last_kind, last_msg = error_history[-1]
+    parts = [
+        "",
+        "## Your previous attempt failed",
+        f"Reason ({last_kind}): {last_msg}",
+        "",
+        "Please write a complete pytest test file with valid Python syntax "
+        "and at least one function named `def test_*`.",
+        "Output ONLY Python code in a ```python ... ``` block; no prose, no "
+        "explanation.",
+        "",
+    ]
+    return "\n".join(parts)
+
+
+def _generate_completion(model, tokenizer, prompt: str, device: str,
+                         max_new_tokens: int) -> str:
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        templated = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    except Exception:
+        templated = prompt
+    inputs = tokenizer(templated, return_tensors="pt", truncation=True, max_length=4096)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    import torch  # local import — torch is imported at top of main()
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            temperature=1.0,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+    return tokenizer.decode(
+        out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+    )
+
+
+def run_episode_with_retries(
+    *,
+    env,
+    base_prompt: str,
+    model,
+    tokenizer,
+    device: str,
+    max_new_tokens: int,
+    max_retries: int,
+) -> dict:
+    """Generate, validate, submit, retry. Returns a dict with keys:
+    test_code, full_completion, reward, components, no_regression_gate,
+    retries_used, error_history, status, gen_elapsed_s, env_eval_elapsed_s.
+    The env has already been reset for the current episode by the caller."""
+    error_history: list[tuple[str, str]] = []
+    last_full_completion = ""
+    last_test_code = ""
+    last_components: dict = {}
+    last_gate: float | None = None
+    last_md: dict = {}
+    total_gen = 0.0
+    total_eval = 0.0
+
+    for attempt in range(max_retries + 1):
+        prompt = base_prompt
+        if error_history:
+            prompt = base_prompt + build_retry_suffix(error_history)
+
+        t0 = time.time()
+        try:
+            full_completion = _generate_completion(
+                model, tokenizer, prompt, device, max_new_tokens
+            )
+        except Exception as exc:
+            error_history.append(("generation_error", f"{type(exc).__name__}: {exc}"))
+            total_gen += time.time() - t0
+            continue
+        total_gen += time.time() - t0
+        last_full_completion = full_completion
+        test_code = _strip_markdown_fences(full_completion)
+        last_test_code = test_code
+
+        validation_error = validate_test_code_structure(test_code)
+        if validation_error:
+            error_history.append(("structural", validation_error))
+            if attempt == max_retries:
+                last_components = {"mutation_kill": 0.0, "coverage_delta": 0.0,
+                                   "format": 0.0, "parsimony": 0.0}
+                last_gate = 0.0
+            continue
+
+        try:
+            action = Action(kind="submit_tests", test_code=test_code)
+        except Exception as exc:
+            error_history.append(("pydantic", f"{type(exc).__name__}: {exc}"))
+            if attempt == max_retries:
+                last_components = {"mutation_kill": 0.0, "coverage_delta": 0.0,
+                                   "format": 0.0, "parsimony": 0.0}
+                last_gate = 0.0
+            continue
+
+        t1 = time.time()
+        obs2 = env.step(action)
+        total_eval += time.time() - t1
+        md = obs2.metadata or {}
+        last_md = md
+        components = dict(md.get("components") or {})
+        gate = md.get("no_regression_gate")
+        reward = float(obs2.reward or 0.0)
+        last_components = components
+        last_gate = gate
+
+        if reward > 0:
+            return {
+                "test_code": test_code,
+                "full_completion": full_completion,
+                "reward": reward,
+                "components": components,
+                "no_regression_gate": gate,
+                "metadata": md,
+                "retries_used": attempt,
+                "error_history": error_history,
+                "status": "success_after_retries" if attempt > 0 else "success",
+                "gen_elapsed_s": round(total_gen, 2),
+                "env_eval_elapsed_s": round(total_eval, 2),
+            }
+
+        # reward == 0: extract why and try again (or stop if we're out).
+        reason = extract_failure_reason(components, gate)
+        error_history.append(("env_rejected", reason))
+        if attempt == max_retries:
+            return {
+                "test_code": test_code,
+                "full_completion": full_completion,
+                "reward": 0.0,
+                "components": components,
+                "no_regression_gate": gate,
+                "metadata": md,
+                "retries_used": attempt,
+                "error_history": error_history,
+                "status": "failed_all_retries",
+                "gen_elapsed_s": round(total_gen, 2),
+                "env_eval_elapsed_s": round(total_eval, 2),
+            }
+        # else: loop back with feedback
+
+    # All attempts exhausted without ever submitting successfully.
+    return {
+        "test_code": last_test_code,
+        "full_completion": last_full_completion,
+        "reward": 0.0,
+        "components": last_components or {"mutation_kill": 0.0, "coverage_delta": 0.0,
+                                          "format": 0.0, "parsimony": 0.0},
+        "no_regression_gate": last_gate if last_gate is not None else 0.0,
+        "metadata": last_md,
+        "retries_used": max_retries,
+        "error_history": error_history,
+        "status": "exhausted_retries",
+        "gen_elapsed_s": round(total_gen, 2),
+        "env_eval_elapsed_s": round(total_eval, 2),
+    }
+
+
 def _strip_markdown_fences(text: str) -> str:
     """Pull out the first ```python|py block, else the first plain ``` block, else the raw text."""
     fence_re = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
@@ -149,7 +365,26 @@ def main() -> int:
              "source code and before the task instruction, capped at "
              f"{_DEMO_BUDGET_CHARS} chars.",
     )
+    ap.add_argument(
+        "--max-retries",
+        type=int,
+        default=0,
+        help="Inference-time self-correction: number of additional attempts "
+             "(beyond the first) the model gets, with a feedback suffix "
+             "describing why the previous attempt failed. 0 reproduces the "
+             "single-shot baseline. Capped at 3.",
+    )
+    ap.add_argument(
+        "--retry-output",
+        type=str,
+        default=None,
+        help="If set, dump per-episode retry stats (status, retries_used, "
+             "error_history) to this JSON path for analysis.",
+    )
     args = ap.parse_args()
+    if args.max_retries < 0 or args.max_retries > 3:
+        print(f"[layer6] FAIL — --max-retries must be in [0, 3], got {args.max_retries}")
+        return 1
 
     demos: dict | None = None
     if args.use_demonstrations:
@@ -211,73 +446,44 @@ def main() -> int:
             obs = env.reset(seed=seed)
             prompt = build_prompt_with_demos(obs, demos)
 
-            t0 = time.time()
-            messages = [{"role": "user", "content": prompt}]
-            try:
-                templated = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-            except Exception:
-                templated = prompt
-
-            inputs = tokenizer(templated, return_tensors="pt", truncation=True, max_length=4096)
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            with torch.no_grad():
-                out = model.generate(
-                    **inputs,
-                    max_new_tokens=args.max_new_tokens,
-                    do_sample=False,
-                    temperature=1.0,
-                    pad_token_id=tokenizer.pad_token_id,
-                )
-            full_text = tokenizer.decode(
-                out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+            result = run_episode_with_retries(
+                env=env,
+                base_prompt=prompt,
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                max_new_tokens=args.max_new_tokens,
+                max_retries=args.max_retries,
             )
-            test_code = _strip_markdown_fences(full_text)
-            gen_elapsed = time.time() - t0
 
+            md = result.get("metadata") or {}
             row: dict = {
                 "episode": i,
                 "seed": seed,
                 "repo": obs.repo_name,
                 "module": obs.module_path,
-                "gen_elapsed_s": round(gen_elapsed, 2),
-                "raw_completion_chars": len(full_text),
-                "test_code_chars": len(test_code),
+                "gen_elapsed_s": result["gen_elapsed_s"],
+                "env_eval_elapsed_s": result["env_eval_elapsed_s"],
+                "raw_completion_chars": len(result["full_completion"]),
+                "test_code_chars": len(result["test_code"]),
+                "final_reward": result["reward"],
+                "components": result["components"],
+                "no_regression_gate": result["no_regression_gate"],
+                "killed_by_new_only": md.get("killed_by_new_only"),
+                "new_coverage": md.get("new_coverage"),
+                "new_tests_pass_clean": md.get("new_tests_pass_clean"),
+                "status": result["status"],
+                "retries_used": result["retries_used"],
+                "error_history": result["error_history"],
             }
-
-            try:
-                action = Action(kind="submit_tests", test_code=test_code)
-            except Exception as exc:
-                row["rejected_at_action"] = True
-                row["action_error"] = f"{type(exc).__name__}: {exc}"
-                row["final_reward"] = 0.0
-                row["components"] = {"mutation_kill": 0.0, "coverage_delta": 0.0, "format": 0.0, "parsimony": 0.0}
-                row["no_regression_gate"] = 0.0
-                rows.append(row)
-                print(
-                    f"  ep{i} seed={seed} repo={obs.repo_name} REJECTED reward=0.0 gen={gen_elapsed:.1f}s",
-                    flush=True,
-                )
-                continue
-
-            t1 = time.time()
-            obs2 = env.step(action)
-            md = obs2.metadata or {}
-            row["final_reward"] = float(obs2.reward or 0.0)
-            row["components"] = dict(md.get("components") or {})
-            row["no_regression_gate"] = md.get("no_regression_gate")
-            row["killed_by_new_only"] = md.get("killed_by_new_only")
-            row["new_coverage"] = md.get("new_coverage")
-            row["new_tests_pass_clean"] = md.get("new_tests_pass_clean")
-            row["status"] = md.get("status")
-            row["env_eval_elapsed_s"] = round(time.time() - t1, 2)
             rows.append(row)
             print(
                 f"  ep{i} seed={seed} repo={obs.repo_name} reward={row['final_reward']:.4f} "
-                f"fmt={row['components'].get('format', 0.0):.2f} "
+                f"fmt={(row['components'] or {}).get('format', 0.0):.2f} "
                 f"gate={row['no_regression_gate']} "
-                f"gen={gen_elapsed:.1f}s eval={row['env_eval_elapsed_s']}s",
+                f"retries={row['retries_used']} "
+                f"status={row['status']} "
+                f"gen={row['gen_elapsed_s']}s eval={row['env_eval_elapsed_s']}s",
                 flush=True,
             )
     finally:
@@ -293,6 +499,14 @@ def main() -> int:
     fmt_zero = sum(1 for r in rows if r["components"].get("format", 0.0) == 0.0) / n if n else 0.0
     gate_zero = sum(1 for r in rows if r.get("no_regression_gate") == 0.0) / n if n else 0.0
 
+    n_with_retries = sum(1 for r in rows if int(r.get("retries_used") or 0) > 0)
+    n_success_after_retry = sum(
+        1 for r in rows if r.get("status") == "success_after_retries"
+    )
+    n_exhausted = sum(
+        1 for r in rows if r.get("status") in ("failed_all_retries", "exhausted_retries")
+    )
+
     summary = {
         "n_episodes": n,
         "mean_reward": mean_r,
@@ -302,16 +516,47 @@ def main() -> int:
         "fraction_reward_gt_0.3": p_above_03,
         "fraction_format_zero": fmt_zero,
         "fraction_regression_gate_zero": gate_zero,
+        "max_retries": args.max_retries,
+        "n_episodes_with_retries": n_with_retries,
+        "n_episodes_success_after_retry": n_success_after_retry,
+        "n_episodes_failed_all_retries": n_exhausted,
     }
 
     out_path = RESULTS_DIR / "zero_shot_distribution.json"
     out_path.write_text(json.dumps({"summary": summary, "episodes": rows}, indent=2) + "\n", encoding="utf-8")
+
+    if args.retry_output:
+        retry_dump = {
+            "summary": summary,
+            "per_episode": [
+                {
+                    "episode": r["episode"],
+                    "seed": r["seed"],
+                    "repo": r["repo"],
+                    "status": r["status"],
+                    "retries_used": r["retries_used"],
+                    "final_reward": r["final_reward"],
+                    "error_history": r["error_history"],
+                }
+                for r in rows
+            ],
+        }
+        Path(args.retry_output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.retry_output).write_text(
+            json.dumps(retry_dump, indent=2) + "\n", encoding="utf-8"
+        )
+        print(f"[layer6] retry stats written to {args.retry_output}")
 
     print()
     print(f"[layer6] n={n} mean={mean_r:.4f} std={std_r:.4f} min={min_r:.4f} max={max_r:.4f}")
     print(f"[layer6] p(reward > 0.3) = {p_above_03:.3f}")
     print(f"[layer6] p(format == 0)  = {fmt_zero:.3f}")
     print(f"[layer6] p(gate   == 0)  = {gate_zero:.3f}")
+    if args.max_retries > 0:
+        print(f"[layer6] retries: max={args.max_retries} "
+              f"used={n_with_retries} "
+              f"recovered_after_retry={n_success_after_retry} "
+              f"failed_all={n_exhausted}")
 
     issues: list[str] = []
     if not (0.10 <= mean_r <= 0.40):
