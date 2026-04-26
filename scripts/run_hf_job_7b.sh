@@ -1,123 +1,111 @@
 #!/usr/bin/env bash
 # Runs INSIDE the HF Job container. Self-contained: clones the repo, installs
-# deps, and walks Phases 0..6. On any failure, the trap pushes whatever
-# artifacts already landed in /tmp/results/ to the dataset repo under partial/.
+# deps, walks Phases 0..6. On any failure the ERR trap pushes whatever is in
+# /tmp/results/ to the dataset repo under partial/.
 #
-# Required env vars (set via `hf jobs run --secret`):
-#   HF_TOKEN
-#   WANDB_API_KEY
+# Required env vars (set via `hf jobs run --secret` / `--env`):
+#   HF_TOKEN          — HF write token
+#   WANDB_API_KEY     — W&B API key
+#
+# Optional env vars:
+#   SKIP_BASELINES=1  — skip Phase 1 + 2; pull baseline JSONs from HF Hub instead
 
 set -euo pipefail
 
 MODEL_REPO="jester1177/mutant-hunter-qwen-coder-7b-lora"
 DATASET_REPO="jester1177/mutant-hunter-results"
 RESULTS_DIR="/tmp/results"
+PYTORCH_INDEX="https://download.pytorch.org/whl/cu124"
 
+# ------------------------------------------------------------------------------
+# ERR trap — best-effort upload of partial artifacts when any step fails
+# ------------------------------------------------------------------------------
 push_partial() {
     rc=$?
     echo ""
-    echo "[trap] caught exit code ${rc}; uploading whatever is in ${RESULTS_DIR}/ as partial/"
+    echo "[trap] caught exit code ${rc}; uploading ${RESULTS_DIR}/ as partial/"
     if [ -d "${RESULTS_DIR}" ]; then
         python - <<'PY' || echo "[trap] partial upload itself failed; giving up"
-import os
 from huggingface_hub import HfApi
-api = HfApi()
-api.upload_folder(
+HfApi().upload_folder(
     folder_path="/tmp/results",
     repo_id="jester1177/mutant-hunter-results",
     repo_type="dataset",
     path_in_repo="partial",
 )
-print("[trap] partial artifacts pushed to dataset repo under partial/")
+print("[trap] partial artifacts pushed under partial/")
 PY
     else
-        echo "[trap] no ${RESULTS_DIR}/ directory exists; nothing to push"
+        echo "[trap] no ${RESULTS_DIR}/ directory; nothing to push"
     fi
     exit "${rc}"
 }
 trap push_partial ERR
 
-echo "=== Phase 0: setup (force-reinstall over base image) ==="
+# ==============================================================================
+# Phase 0: setup
+# ==============================================================================
+echo "=== Phase 0: setup ==="
 cd /tmp
-if [ ! -d MetaOpenEnv_MutantHunter ]; then
-    git clone https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter.git
-fi
+[ -d MetaOpenEnv_MutantHunter ] || git clone https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter.git
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
-# Install huggingface_hub up front so the ERR trap can always upload partial
-# artifacts, even if a later step fails before training extras are installed.
+# Install huggingface_hub up front so the ERR trap can always upload partials,
+# even if a later install step fails.
 pip install --no-cache-dir huggingface_hub
 
-# Poll the CUDA driver via libcuda directly (no torch needed yet). Right after
-# container boot cuInit returns 802 ("system not yet initialized") for a few
-# seconds. Wait up to ~120s before giving up.
-python - <<'PY'
-import ctypes, sys, time
-last_rc = None
-for attempt in range(30):
-    try:
-        cuda = ctypes.CDLL("libcuda.so.1")
-    except OSError as e:
-        print(f"  attempt {attempt+1}/30: libcuda not loadable ({e}), sleeping 4s ...", flush=True)
-        time.sleep(4)
-        continue
-    rc = cuda.cuInit(0)
-    last_rc = rc
-    if rc == 0:
-        n = ctypes.c_int()
-        if cuda.cuDeviceGetCount(ctypes.byref(n)) == 0 and n.value > 0:
-            print(f"CUDA driver ready: {n.value} device(s) after {attempt+1} polls")
-            sys.exit(0)
-    print(f"  attempt {attempt+1}/30: cuInit rc={rc}, sleeping 4s ...", flush=True)
-    time.sleep(4)
-print(f"ERROR: CUDA driver still not ready after ~120s (last cuInit rc={last_rc})", file=sys.stderr)
-sys.exit(1)
-PY
+# Wait for the GPU driver. nvidia-smi talks to NVML and typically succeeds even
+# when the CUDA driver API (cuInit) is still returning 802. ~120s budget.
+echo "Waiting for GPU driver ..."
+for i in $(seq 1 30); do
+    if nvidia-smi -L 2>/dev/null | grep -q GPU; then
+        echo "GPU driver ready: $(nvidia-smi -L | head -n1)"
+        break
+    fi
+    echo "  attempt ${i}/30: nvidia-smi not ready yet, sleeping 4s ..."
+    sleep 4
+    if [ "$i" = "30" ]; then
+        echo "ERROR: nvidia-smi never reported a GPU after ~120s" >&2
+        exit 1
+    fi
+done
 
-# Force-replace the base image's pre-installed torch 2.5.1 / torchvision 0.20.1
-# / torchaudio 2.5.1 with the latest cu124 wheels. --upgrade alone won't move
-# torchaudio (it pins torch==2.5.1), and --no-deps would skip the matched
-# triton/cusparselt bumps. --force-reinstall guarantees the wheels are
-# overwritten regardless of "already satisfied".
+# The base image (pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel) ships
+# torch==2.5.1 / torchvision==0.20.1 / torchaudio==2.5.1. TRL >= 1.x needs
+# FSDPModule which was only added in torch 2.6, so we MUST upgrade. Plain
+# --upgrade can't move torchaudio (it pins torch==2.5.1), and pip will
+# otherwise say "already satisfied" for torch. --force-reinstall sidesteps
+# both: all three wheels are overwritten as a matched set.
 pip install --no-cache-dir --upgrade --force-reinstall \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+    torch torchvision torchaudio --index-url "${PYTORCH_INDEX}"
 
-# Verify torch is actually upgraded past 2.6 (TRL 1.x needs FSDPModule which
-# only landed in torch 2.6) and CUDA still works after the swap
 python -c "
 import torch, torchvision
-from torchvision import io as _io
-from torch.distributed.fsdp import FSDPModule  # smoke-test the import that bit us
-maj, min_ = (int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
-assert (maj, min_) >= (2, 6), f'torch is {torch.__version__}, need >=2.6 for FSDPModule (TRL)'
-print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, CUDA={torch.cuda.is_available()}')
-assert torch.cuda.is_available(), 'No CUDA'
+from torchvision import io as _io           # exercises torchvision C++ ops
+from torch.distributed.fsdp import FSDPModule  # the import that bit us
+maj, mn = (int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
+assert (maj, mn) >= (2, 6), f'torch is {torch.__version__}, need >=2.6 for FSDPModule'
+assert torch.cuda.is_available(), 'torch reports no CUDA'
+print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, devices={torch.cuda.device_count()}')
 "
 
-# Install project + extras
+# Project + extras (training extras pull trl/transformers/peft/accelerate/datasets)
 pip install --no-cache-dir -e ".[training]"
-
-# Verify TRL imports cleanly
-python -c "
-import trl
-from trl import GRPOTrainer, GRPOConfig
-print(f'TRL {trl.__version__} GRPOTrainer importable')
-"
-
 pip install --no-cache-dir bitsandbytes wandb
 
-# Verify full import chain that previously crashed
 python -c "
+import trl, bitsandbytes
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
-import bitsandbytes
 from trl import GRPOTrainer, GRPOConfig
-print('All training-pipeline imports succeed')
+print(f'TRL={trl.__version__}, bitsandbytes={bitsandbytes.__version__} — full training-pipeline imports OK')
 "
 
+# Hub + W&B logins
 python -c "from huggingface_hub import login; login(token='${HF_TOKEN}')"
-python -c "import os; os.environ['HOME']='/tmp'; import wandb; wandb.login(key='${WANDB_API_KEY}')"
+test -n "${WANDB_API_KEY:-}" || { echo "ERROR: WANDB_API_KEY is empty in container" >&2; exit 1; }
+HOME=/tmp wandb login --relogin "${WANDB_API_KEY}"
 
 python - <<'PY'
 from huggingface_hub import HfApi
@@ -127,6 +115,9 @@ api.create_repo("jester1177/mutant-hunter-results", repo_type="dataset", exist_o
 print("repos ready")
 PY
 
+# ==============================================================================
+# Phase 1 + 2: baselines (skippable via SKIP_BASELINES=1)
+# ==============================================================================
 if [ -z "${SKIP_BASELINES:-}" ]; then
     echo "=== Phase 1: heuristic baseline (~5 min) ==="
     python training/baseline_eval.py \
@@ -167,8 +158,7 @@ upload_file(
 print("baseline_zeroshot.json pushed")
 PY
 else
-    echo "=== Skipping Phase 1 and Phase 2 (SKIP_BASELINES set) ==="
-    echo "Downloading baseline JSONs from HF Hub..."
+    echo "=== Skipping Phase 1 + 2 (SKIP_BASELINES set); pulling baselines from HF Hub ==="
     python - <<'PY'
 from huggingface_hub import hf_hub_download
 hf_hub_download(repo_id="jester1177/mutant-hunter-results", filename="baseline_heuristic.json",
@@ -179,7 +169,10 @@ print("Baselines downloaded from HF Hub")
 PY
 fi
 
-echo "=== Phase 3: 200-step GRPO training (~4h) ==="
+# ==============================================================================
+# Phase 3: GRPO training (~4h)
+# ==============================================================================
+echo "=== Phase 3: GRPO training ==="
 python training/train_grpo.py \
     --steps 80 \
     --rollouts-per-step 3 \
@@ -220,8 +213,11 @@ else
     echo "[warn] training_log.jsonl not found; skipping upload"
 fi
 
-echo "=== Phase 4: trained eval (~30 min) ==="
-# Stash Phase 2 output so the next run does not clobber it.
+# ==============================================================================
+# Phase 4: trained eval (~30 min)
+# ==============================================================================
+echo "=== Phase 4: trained eval ==="
+# Stash Phase 2 output so the trained-eval write does not clobber it.
 cp "${RESULTS_DIR}/baseline_zeroshot.json" "${RESULTS_DIR}/baseline_zeroshot.keep.json"
 
 python evaluation/zero_shot_distribution.py \
@@ -245,6 +241,9 @@ upload_file(
 print("trained_eval.json pushed")
 PY
 
+# ==============================================================================
+# Phase 5: plots
+# ==============================================================================
 echo "=== Phase 5: plots ==="
 python evaluation/make_plots.py \
     --baseline-heuristic-json "${RESULTS_DIR}/baseline_heuristic.json" \
@@ -264,6 +263,9 @@ HfApi().upload_folder(
 print("plots/ pushed to model repo")
 PY
 
+# ==============================================================================
+# Phase 6: summary
+# ==============================================================================
 echo "=== Phase 6: summary ==="
 echo "Model:   https://huggingface.co/${MODEL_REPO}"
 echo "Dataset: https://huggingface.co/datasets/${DATASET_REPO}"
