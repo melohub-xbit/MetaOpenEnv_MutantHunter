@@ -88,5 +88,6 @@ The corpus is four libraries. It was sized to make `/reset` fast and to keep the
 - **HF Hub (dataset)**: corpus + per-module precomputed baselines
 - **HF Hub (model)**: zero-shot eval logs for Qwen2.5-Coder-7B; no trained checkpoint published
 - **W&B run**: 80-step GRPO run with full reward decomposition
+- **Demo video**: <https://youtu.be/WW2YbD9o2eA>
 
 Mutation testing is an RL reward we already had; we just had not been wiring it up. The env, defenses, and zero-shot evidence in this Phase 1 are reusable for anyone working on verified-reward RL for code. The training story is unfinished, and that part is the next chapter.

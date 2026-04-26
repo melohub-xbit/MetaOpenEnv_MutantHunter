@@ -19,7 +19,7 @@ An RL environment that teaches LLMs to write tests that actually catch bugs.
 - 💻 **GitHub**: [melohub-xbit/MetaOpenEnv_MutantHunter](https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter)
 - 📊 **W&B Training Run**: [mutant-hunter-final](https://wandb.ai/kvelidanda-international-institute-of-information-techno/mutant-hunter-final/runs/k9pzx8n1)
 - 📝 **Blog post**: [BLOG.md](BLOG.md)
-- 🎥 **Demo Video**: _link will be added after recording_
+- 🎥 **Demo Video**: [youtu.be/WW2YbD9o2eA](https://youtu.be/WW2YbD9o2eA)
 - 🤖 **Trained LoRA**: [jester1177/mutant-hunter-qwen-coder-7b-lora](https://huggingface.co/jester1177/mutant-hunter-qwen-coder-7b-lora)
 - 📦 **Eval Dataset**: [jester1177/mutant-hunter-results](https://huggingface.co/datasets/jester1177/mutant-hunter-results)
 - 🚀 **Phase 2 Roadmap**: [docs/phase2_self_play.md](docs/phase2_self_play.md)
