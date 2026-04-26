@@ -15,7 +15,6 @@ set -euo pipefail
 MODEL_REPO="jester1177/mutant-hunter-qwen-coder-7b-lora"
 DATASET_REPO="jester1177/mutant-hunter-results"
 RESULTS_DIR="/tmp/results"
-PYTORCH_INDEX="https://download.pytorch.org/whl/cu124"
 
 # ------------------------------------------------------------------------------
 # ERR trap — best-effort upload of partial artifacts when any step fails
@@ -55,8 +54,12 @@ mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 # even if a later install step fails.
 pip install --no-cache-dir huggingface_hub
 
-# Wait for the GPU driver. nvidia-smi talks to NVML and typically succeeds even
-# when the CUDA driver API (cuInit) is still returning 802. ~120s budget.
+# Wait for the GPU driver. nvidia-smi talks to NVML and is typically ready
+# within seconds. ~120s budget. We do NOT poll torch.cuda.is_available()
+# afterwards because the previous force-reinstall approach (swapping every
+# nvidia-* userspace lib) left cuInit() in a 802 "system not initialized"
+# state indefinitely. The fix is to stay on a base image that already ships
+# the torch version we need (2.6+), so no CUDA-stack churn happens at all.
 echo "Waiting for GPU driver ..."
 for i in $(seq 1 30); do
     if nvidia-smi -L 2>/dev/null | grep -q GPU; then
@@ -71,42 +74,17 @@ for i in $(seq 1 30); do
     fi
 done
 
-# The base image (pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel) ships
-# torch==2.5.1 / torchvision==0.20.1 / torchaudio==2.5.1. TRL >= 1.x needs
-# FSDPModule which was only added in torch 2.6, so we MUST upgrade. Plain
-# --upgrade can't move torchaudio (it pins torch==2.5.1), and pip will
-# otherwise say "already satisfied" for torch. --force-reinstall sidesteps
-# both: all three wheels are overwritten as a matched set.
-pip install --no-cache-dir --upgrade --force-reinstall \
-    torch torchvision torchaudio --index-url "${PYTORCH_INDEX}"
-
-# Static checks (torch version, FSDPModule import, torchvision C++ ops):
+# Sanity-check the prebuilt torch stack (no reinstall — image is
+# pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel which already has torch 2.6).
 python -c "
 import torch, torchvision
 from torchvision import io as _io
 from torch.distributed.fsdp import FSDPModule
 maj, mn = (int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
 assert (maj, mn) >= (2, 6), f'torch is {torch.__version__}, need >=2.6 for FSDPModule'
-print(f'torch={torch.__version__}, torchvision={torchvision.__version__} — static imports OK')
+assert torch.cuda.is_available() and torch.cuda.device_count() > 0, 'torch reports no CUDA'
+print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, devices={torch.cuda.device_count()} — OK')
 "
-
-# CUDA-driver-ready check: nvidia-smi/NVML can be ready before the CUDA driver
-# API (cuInit) is, so torch.cuda.is_available() trips error 802 on the first
-# probes. torch caches the failed result inside one process, so we retry from
-# a *fresh* python invocation each iteration. ~120s budget.
-echo "Waiting for CUDA driver API (cuInit) ..."
-for i in $(seq 1 30); do
-    if python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() and torch.cuda.device_count()>0 else 1)" 2>/dev/null; then
-        echo "CUDA driver API ready: $(python -c 'import torch; print(torch.cuda.device_count(), "device(s)")')"
-        break
-    fi
-    echo "  attempt ${i}/30: torch.cuda.is_available() False, sleeping 4s ..."
-    sleep 4
-    if [ "$i" = "30" ]; then
-        echo "ERROR: torch.cuda.is_available() never True after ~120s" >&2
-        exit 1
-    fi
-done
 
 # Project + extras (training extras pull trl/transformers/peft/accelerate/datasets)
 pip install --no-cache-dir -e ".[training]"
