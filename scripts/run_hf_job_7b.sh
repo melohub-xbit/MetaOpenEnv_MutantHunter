@@ -37,7 +37,7 @@ PY
 }
 trap push_partial ERR
 
-echo "=== Phase 0: setup ==="
+echo "=== Phase 0: setup (clean install) ==="
 cd /tmp
 if [ ! -d MetaOpenEnv_MutantHunter ]; then
     git clone https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter.git
@@ -45,49 +45,41 @@ fi
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
-# Install huggingface_hub up front so the ERR trap can always upload partial
-# artifacts, even if a later step fails before training extras are installed.
-pip install --no-cache-dir huggingface_hub
+# Install torch + torchvision together from official cu124 wheels (consistent ABI)
+pip install --no-cache-dir 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cu124
 
-# CUDA driver may report error 802 ("system not yet initialized") for a few
-# seconds after container boot. Poll for up to ~60s before giving up.
-python - <<'PY'
-import sys, time
+# Verify torch + torchvision import without ABI errors
+python -c "
 import torch
-last_err = None
-for attempt in range(15):
-    try:
-        if torch.cuda.is_available():
-            print(f"Using pre-installed torch {torch.__version__}, "
-                  f"CUDA {torch.version.cuda}, devices={torch.cuda.device_count()}")
-            sys.exit(0)
-    except Exception as e:
-        last_err = e
-    print(f"  attempt {attempt+1}/15: CUDA not ready yet"
-          + (f" ({last_err})" if last_err else "")
-          + ", sleeping 4s ...", flush=True)
-    time.sleep(4)
-print("ERROR: CUDA still not available after ~60s of polling", file=sys.stderr)
-sys.exit(1)
-PY
+import torchvision
+from torchvision import io as _io
+print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, CUDA={torch.cuda.is_available()}')
+assert torch.cuda.is_available(), 'No CUDA'
+"
 
-# Upgrade torch to 2.5+ to satisfy TRL 0.14+ (FSDPModule requirement).
-# torchvision MUST be upgraded in the same step or its compiled ops (e.g.
-# torchvision::nms) won't register against the new torch and transformers
-# will fail to import. torchaudio is upgraded for the same reason.
-pip install --no-cache-dir --upgrade \
-    'torch>=2.5,<2.7' 'torchvision>=0.20,<0.22' 'torchaudio>=2.5,<2.7' \
-    --index-url https://download.pytorch.org/whl/cu124
-python -c "import torch, torchvision; assert torch.__version__.startswith(('2.5','2.6')), f'torch is {torch.__version__}, need 2.5+'; print(f'torch {torch.__version__} / torchvision {torchvision.__version__} / CUDA {torch.version.cuda}'); import torchvision.ops; torchvision.ops.nms.__doc__ and print('torchvision::nms registered OK')"
-
+# Install project + extras
 pip install --no-cache-dir -e ".[training]"
+
+# Verify TRL imports cleanly
+python -c "
+import trl
+from trl import GRPOTrainer, GRPOConfig
+print(f'TRL {trl.__version__} GRPOTrainer importable')
+"
+
 pip install --no-cache-dir bitsandbytes wandb
 
+# Verify full import chain that previously crashed
+python -c "
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+import bitsandbytes
+from trl import GRPOTrainer, GRPOConfig
+print('All training-pipeline imports succeed')
+"
+
 python -c "from huggingface_hub import login; login(token='${HF_TOKEN}')"
-# wandb login: verify the secret reached the container, then use the CLI
-# (more resilient across wandb versions than wandb.login(key=...)).
-test -n "${WANDB_API_KEY:-}" || { echo "ERROR: WANDB_API_KEY env var is empty in container" >&2; exit 1; }
-HOME=/tmp wandb login --relogin "${WANDB_API_KEY}"
+python -c "import os; os.environ['HOME']='/tmp'; import wandb; wandb.login(key='${WANDB_API_KEY}')"
 
 python - <<'PY'
 from huggingface_hub import HfApi
