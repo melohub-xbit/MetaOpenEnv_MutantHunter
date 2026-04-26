@@ -52,6 +52,7 @@ import importlib
 import json
 import os
 import random
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +88,31 @@ class TrainingConfig:
     seed: int
     output_dir: Path
     wandb_project: str | None
+
+
+# --- Completion post-processing --------------------------------------------
+
+
+_FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """Pull out the first ```python|py block, else the first plain ``` block,
+    else the raw text. Mirrors evaluation/zero_shot_distribution.py so the
+    GRPO reward path sees the same test_code the zero-shot eval path sees."""
+    m = _FENCE_RE.search(text)
+    if m:
+        return m.group(1).strip("\n")
+    lines = text.splitlines()
+    for i, ln in enumerate(lines):
+        if (
+            ln.startswith("import ")
+            or ln.startswith("from ")
+            or ln.startswith("def test_")
+            or ln.startswith("class Test")
+        ):
+            return "\n".join(lines[i:])
+    return text
 
 
 # --- Prompt construction ----------------------------------------------------
@@ -224,27 +250,70 @@ def load_policy(cfg: TrainingConfig):
 # --- Reward function (per-prompt callable used by GRPOTrainer) -------------
 
 
-def make_reward_fn(env: MutantHunterEnvironment):
+def make_reward_fn(
+    env: MutantHunterEnvironment,
+    prompt_to_seed: dict[str, int],
+    debug_rollouts: int = 4,
+):
     """Return a callable suitable for TRL's GRPOTrainer ``reward_funcs``.
 
     GRPOTrainer calls reward_funcs(prompts=[...], completions=[...]) and
     expects a list of floats. Each completion is a candidate test file;
     we score it by stepping the env once.
+
+    ``prompt_to_seed`` maps the prompt string back to the seed that built
+    it via ``make_prompt_dataset``, so env.reset() targets the SAME episode
+    the model was prompted on. Falling back to a hash-derived seed would
+    evaluate completions against an unrelated episode (the original bug
+    that pinned all rewards to 0).
     """
+    debug_remaining = {"n": debug_rollouts}
+
     def reward_fn(prompts: list[str], completions: list[str], **_: Any) -> list[float]:
-        # We require each rollout to have run reset() with its own seed —
-        # we mirror that here by deriving a seed per-prompt.
         rewards: list[float] = []
         for i, completion in enumerate(completions):
-            seed = (hash(prompts[i]) + i) & 0xFFFFFFFF
+            mapped_seed = prompt_to_seed.get(prompts[i])
+            if mapped_seed is None:
+                seed = (hash(prompts[i]) + i) & 0xFFFFFFFF
+                seed_source = "fallback-hash"
+            else:
+                seed = mapped_seed
+                seed_source = "dataset"
             env.reset(seed=seed)
+
+            test_code = _strip_markdown_fences(completion)
+            had_fence = test_code != completion
+
             try:
-                action = Action(kind="submit_tests", test_code=completion)
-            except Exception:
+                action = Action(kind="submit_tests", test_code=test_code)
+            except Exception as exc:
+                if debug_remaining["n"] > 0:
+                    print(
+                        f"[reward_fn] DEBUG seed={seed} ({seed_source}) "
+                        f"REJECTED at Action(): {type(exc).__name__}: {exc} "
+                        f"raw_len={len(completion)} stripped_len={len(test_code)} "
+                        f"had_fence={had_fence}",
+                        flush=True,
+                    )
+                    debug_remaining["n"] -= 1
                 rewards.append(0.0)
                 continue
+
             obs = env.step(action)
-            rewards.append(float(obs.reward or 0.0))
+            reward = float(obs.reward or 0.0)
+            if debug_remaining["n"] > 0:
+                md = getattr(obs, "metadata", None) or {}
+                print(
+                    f"[reward_fn] DEBUG seed={seed} ({seed_source}) reward={reward:.4f} "
+                    f"raw_len={len(completion)} stripped_len={len(test_code)} "
+                    f"had_fence={had_fence} "
+                    f"components={md.get('components')} "
+                    f"gate={md.get('no_regression_gate')} "
+                    f"status={md.get('status')}",
+                    flush=True,
+                )
+                debug_remaining["n"] -= 1
+            rewards.append(reward)
         return rewards
 
     return reward_fn
@@ -254,14 +323,24 @@ def make_reward_fn(env: MutantHunterEnvironment):
 
 
 def make_prompt_dataset(env: MutantHunterEnvironment, n: int, seed_start: int):
+    """Build a prompt dataset and a prompt_str -> seed map.
+
+    The map is the canonical way to recover, in the reward function, which
+    episode each prompt was constructed from. Without it, the reward
+    function has no idea which (repo, module) the completion was meant for.
+    """
     datasets = _try_import("datasets")
     if datasets is None:
         raise RuntimeError("datasets is required for GRPOTrainer prompt iteration")
     rows: list[dict[str, str]] = []
+    prompt_to_seed: dict[str, int] = {}
     for i in range(n):
-        obs = env.reset(seed=seed_start + i)
-        rows.append({"prompt": build_prompt(obs)})
-    return datasets.Dataset.from_list(rows)
+        seed = seed_start + i
+        obs = env.reset(seed=seed)
+        prompt = build_prompt(obs)
+        rows.append({"prompt": prompt})
+        prompt_to_seed[prompt] = seed
+    return datasets.Dataset.from_list(rows), prompt_to_seed
 
 
 # --- Main loop ------------------------------------------------------------
@@ -290,7 +369,9 @@ def run(cfg: TrainingConfig) -> int:
     # Build a prompt dataset large enough to feed `steps * rollouts_per_step`
     # rollouts. The dataset cycles internally per TRL semantics.
     n_prompts = max(8, cfg.steps * max(1, cfg.rollouts_per_step // 2))
-    train_dataset = make_prompt_dataset(env, n=n_prompts, seed_start=cfg.seed)
+    train_dataset, prompt_to_seed = make_prompt_dataset(
+        env, n=n_prompts, seed_start=cfg.seed
+    )
 
     grpo_kwargs: dict[str, Any] = dict(
         output_dir=str(cfg.output_dir),
@@ -319,7 +400,7 @@ def run(cfg: TrainingConfig) -> int:
         processing_class=tokenizer,
         args=args,
         train_dataset=train_dataset,
-        reward_funcs=[make_reward_fn(env)],
+        reward_funcs=[make_reward_fn(env, prompt_to_seed)],
     )
 
     trainer.train()
