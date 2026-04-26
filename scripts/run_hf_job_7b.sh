@@ -80,15 +80,33 @@ done
 pip install --no-cache-dir --upgrade --force-reinstall \
     torch torchvision torchaudio --index-url "${PYTORCH_INDEX}"
 
+# Static checks (torch version, FSDPModule import, torchvision C++ ops):
 python -c "
 import torch, torchvision
-from torchvision import io as _io           # exercises torchvision C++ ops
-from torch.distributed.fsdp import FSDPModule  # the import that bit us
+from torchvision import io as _io
+from torch.distributed.fsdp import FSDPModule
 maj, mn = (int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
 assert (maj, mn) >= (2, 6), f'torch is {torch.__version__}, need >=2.6 for FSDPModule'
-assert torch.cuda.is_available(), 'torch reports no CUDA'
-print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, devices={torch.cuda.device_count()}')
+print(f'torch={torch.__version__}, torchvision={torchvision.__version__} — static imports OK')
 "
+
+# CUDA-driver-ready check: nvidia-smi/NVML can be ready before the CUDA driver
+# API (cuInit) is, so torch.cuda.is_available() trips error 802 on the first
+# probes. torch caches the failed result inside one process, so we retry from
+# a *fresh* python invocation each iteration. ~120s budget.
+echo "Waiting for CUDA driver API (cuInit) ..."
+for i in $(seq 1 30); do
+    if python -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() and torch.cuda.device_count()>0 else 1)" 2>/dev/null; then
+        echo "CUDA driver API ready: $(python -c 'import torch; print(torch.cuda.device_count(), "device(s)")')"
+        break
+    fi
+    echo "  attempt ${i}/30: torch.cuda.is_available() False, sleeping 4s ..."
+    sleep 4
+    if [ "$i" = "30" ]; then
+        echo "ERROR: torch.cuda.is_available() never True after ~120s" >&2
+        exit 1
+    fi
+done
 
 # Project + extras (training extras pull trl/transformers/peft/accelerate/datasets)
 pip install --no-cache-dir -e ".[training]"
