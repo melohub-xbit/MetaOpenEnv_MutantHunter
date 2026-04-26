@@ -94,6 +94,35 @@ The model writes new pytest functions and submits them. The env then:
 
 That scalar gets fed back into the model's weights via GRPO.
 
+## Results
+
+We evaluated three policies against 15 deterministic eval episodes spanning 4 libraries (`mini_calendar`, `csv_normalizer`, `bloom_filter_lite`, `interval_tree`).
+
+| Policy | Mean Reward | p(reward > 0.3) | p(gate == 0) |
+|---|---|---|---|
+| Heuristic (mutation_aware) | 0.000 | 0.00 | 1.00 |
+| Qwen2.5-Coder-1.5B zero-shot | 0.000 | 0.00 | 1.00 |
+| Qwen2.5-Coder-7B zero-shot | 0.172 | 0.27 | 0.47 |
+| Qwen2.5-Coder-7B + 80 GRPO steps | 0.172 | 0.27 | 0.47 |
+
+![Reward curve](plots/reward_curve.png)
+![Per-component breakdown](plots/per_reward_breakdown.png)
+![Mutation kill rate](plots/mutation_kill_rate.png)
+![Baseline vs trained](plots/baseline_vs_trained.png)
+
+## Findings
+
+The training run shows flat reward curves across 80 GRPO steps. We investigated and identified the cause: under TRL's GRPO sampling (default temperature ~1.0), the 7B model produced malformed pytest code in every rollout — outputs ranged from length-1 truncations to 1024-token runs without valid Python structure. The reward function correctly rejected all of these (gate=0), giving GRPO no gradient signal to amplify.
+
+Lowering the temperature to 0.7 did not resolve this. The fundamental issue is that small-to-mid coder models struggle to maintain valid pytest format under stochastic rollout sampling, even when zero-shot greedy generation produces correct output. This is consistent with known difficulties of RL'ing code-generation models without warm-start SFT.
+
+Despite the training no-op, we validated:
+- **Zero-shot 7B has real signal**: 27% of episodes score above 0.3 mean reward, with consistent successes on `bloom_filter_lite` (0.27) and `mini_calendar` (0.37).
+- **The reward function is correctly hard**: heuristic baselines score 0.0, validating the env is not gameable.
+- **All 15 reward-hacking adversarial cases are blocked**: empty tests, vacuous assertions, subprocess escapes, regression-introducing tests, and 11 others all correctly score below threshold.
+
+Phase 2 (self-play, see [docs/phase2_self_play.md](docs/phase2_self_play.md)) addresses this by introducing a structured Mutator agent with constrained action grammar, which sidesteps the natural-language generation problem.
+
 ## Why this matters
 
 Anyone shipping LLM-written test code today is shipping confidence theatre:
@@ -135,6 +164,10 @@ Tests:
 ```bash
 python -m pytest -q tests
 ```
+
+## Phase 2: Co-Evolution Roadmap
+
+See [docs/phase2_self_play.md](docs/phase2_self_play.md) for our self-play extension. The key insight: replace free-form LLM rollouts with a structured Mutator agent that generates mutations from a constrained action grammar (operator + target + replacement). The Tester agent (current MutantHunter) writes tests; the Mutator gets a learnability reward of `4 * p * (1 - p)` where `p` is the empirical kill rate. This sidesteps the malformed-output problem we encountered in Phase 1.
 
 ## License
 

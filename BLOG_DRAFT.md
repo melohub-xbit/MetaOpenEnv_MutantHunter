@@ -1,0 +1,90 @@
+# Teaching LLMs to Write Tests That Actually Catch Bugs
+
+## The 100% coverage paradox
+
+Open any large Python codebase with a coverage gate. You will find files at 100%, modules at 95%, packages reporting "fully tested." Now break a function — flip a `+` to a `-`, an `>=` to a `>`, a `True` to a `False` — and run the suite. Many of those tests will still pass. Coverage measured *which lines executed during the test*. It said nothing about whether the tests would have *noticed* if those lines were wrong. A test that calls `add(2, 2)` and then asserts the result is "an integer" runs the line, hits the gate, and protects nothing. The same gap is now being widened by every LLM that writes tests for free in CI: optimized for green checkmarks, not for the property a test is supposed to provide.
+
+## The problem
+
+The capability gap is narrow but load-bearing. We do not need an LLM that writes more tests; we need an LLM that writes tests an adversary would have to work to fool. The training signal it has been given so far points the wrong way.
+
+When humans write tests, the implicit reward is "the test passes and the PR merges." When LLMs write tests, the explicit reward is "lint clean, coverage up, CI green." Both reward functions are satisfied by the *vacuous* test — the `assert isinstance(result, int)`, the `try / except: pass`, the `assert add(2, 2) is not None`. Such tests pass on the correct code and they pass on broken code, and that is exactly the failure mode you do not want to ship into a regression suite that future humans will trust. Worse, when an LLM gets stuck, "make the test less specific" is the easiest move available to it. Every bad incentive in the data points the same way.
+
+What is missing is an objective signal — a thing the model cannot fake by writing softer assertions — that tells it whether a given test would actually have caught a bug. That signal is what mutation testing provides.
+
+## Mutation testing as an RL reward
+
+Mutation testing inverts the question. Instead of asking *did the test run the code*, it asks: *if I deliberately break the code in a small way, will the tests notice?*
+
+Consider:
+
+```python
+def add(a, b):
+    return a + b
+
+def test_add():
+    assert add(2, 2) == 4
+```
+
+Coverage is 100%. Now flip the operator:
+
+- `+` → `-`: `add(2, 2)` returns `0`, test fails. **Mutant killed.**
+- `+` → `*`: `add(2, 2)` returns `4`, test passes. **Mutant survived.**
+- `+` → `**`: `add(2, 2)` returns `4`, test passes. **Mutant survived.**
+
+One out of three. Mutation score: 33%. Adding `assert add(2, 3) == 5` and `assert add(0, 0) == 0` kills the other two. Same coverage, materially stronger test.
+
+That fraction — `mutants_killed / mutants_introduced` — is a verifiable, dense, non-negotiable scalar. It is not a preference signal; it is a property of the code under known perturbation. It cannot be reward-hacked by writing more confident-sounding prose. It is exactly the shape of reward modern RL'd-LLM training pipelines were built to consume. So we build the environment that produces it, and we hand the gradient to GRPO.
+
+## The environment
+
+`MutantHunter` is an [OpenEnv](https://github.com/openreasoning/openenv) FastAPI server. Each episode hands the agent a small Python library (`mini_calendar`, `csv_normalizer`, `bloom_filter_lite`, `interval_tree`), the library's existing weak test suite, and a list of mutants the existing tests fail to catch. The agent calls tools (`read_file`, `list_tests`, `run_tests`, `get_coverage`, `get_mutation_report`) to inspect the module, then submits a pytest file. The env then:
+
+1. Runs the new tests against the unmodified source. Every one must pass; if any fail, the agent has written broken tests, and the **no-regression gate** fires — reward goes to zero regardless of any mutant kills. This is the central anti-hack mechanism.
+2. Runs the new tests against each surviving mutant. Each mutant whose suite now fails is killed by the agent's tests.
+3. Computes reward from four components: mutation kill rate (the dominant term), coverage delta on lines the existing suite missed, format validity, and a parsimony penalty that prevents flooding the suite with redundant tests. The components are combined into a scalar in [0, 1], gated to zero on regression.
+
+Mutants are precomputed per `(repo, module)` and cached, so `/reset` is fast and deterministic given a seed. The corpus is small on purpose — four libraries, hand-curated, covering enough operator coverage that the mutation engine produces meaningful surviving sets without the agent being able to memorize a single repo's structure.
+
+## Reward-hacking defenses
+
+If the reward function is a number an LLM is trying to maximize, every shortcut to that number is a candidate exploit. We enumerated 15 adversarial test patterns — empty submissions, `assert True` flooders, vacuous `isinstance` chains, `try/except: pass` swallowers, subprocess escapes, file-system writes, mocked imports of the module under test, regression-introducing tests masquerading as new ones, redundant duplicate-of-existing tests, and 6 more variations. Each was implemented in `evaluation/reward_hacking_tests.py` and run against the env.
+
+All 15 score below threshold. The unifying mechanism is the no-regression gate: any test that fails on the unmutated source — including tests that *introduce* a regression by relying on side effects — collapses the reward to zero before the mutation-kill term is computed. The parsimony penalty handles flood attacks. Coverage delta refuses credit for tests that exercise no new lines. Format validation rejects unparseable submissions. The defenses compose; we do not need a separate detector for each hack class because the gate covers most of them by construction.
+
+## Findings
+
+We evaluated three policies against 15 deterministic eval episodes spanning all four libraries:
+
+| Policy | Mean Reward | p(reward > 0.3) | p(gate == 0) |
+|---|---|---|---|
+| Heuristic (mutation_aware) | 0.000 | 0.00 | 1.00 |
+| Qwen2.5-Coder-1.5B zero-shot | 0.000 | 0.00 | 1.00 |
+| Qwen2.5-Coder-7B zero-shot | 0.172 | 0.27 | 0.47 |
+| Qwen2.5-Coder-7B + 80 GRPO steps | 0.172 | 0.27 | 0.47 |
+
+The cold-start at 1.5B was decisive: every rollout failed the no-regression gate. The 7B zero-shot baseline cleared 0.17 mean reward with 27% of episodes scoring above 0.3 — a real signal, not noise, and consistent with the env being calibrated correctly.
+
+Then GRPO did nothing. Eighty steps, flat curve, identical post-training distribution. We dug in. Two bugs in the reward-routing path were found and fixed: a seed-mismatch where the prompt's episode and the env-step's episode were unrelated, and a missing markdown-fence strip that left the env trying to parse `\`\`\`python` as Python. A smoke test with hand-fed valid pytest now produced reward 0.20 across four seeds with the correct episode routing — the reward function works.
+
+The actual training run still produced reward zero. The remaining cause is upstream of any wiring fix: under GRPO's stochastic rollout sampling, the 7B model emits malformed pytest in essentially every rollout. Outputs ranged from length-1 truncations to full-length 1024-token runs without valid Python structure. Lowering temperature from 1.0 to 0.7 did not change the outcome. Greedy zero-shot generation works, sampled rollouts do not, and the gate honestly reports both as zero reward.
+
+This is the finding worth documenting. Small-to-mid coder models, even ones strong enough to clear the env zero-shot, do not maintain valid pytest format under stochastic sampling. The standard remedy in the literature — warm-start SFT on the target output format, then RL — is the obvious next step, and we did not have time to run it. But the underlying claim is now backed by data on this env: pure RL from scratch on a code-generation task with a hard format gate will burn tokens on rollouts that the gate correctly rejects, and the gradient will be zero. RL'ing a code generator without an SFT stage is, on this evidence, not how this should be done.
+
+## Phase 2 roadmap
+
+The Phase 2 design (see [`docs/phase2_self_play.md`](docs/phase2_self_play.md)) addresses the format-gate problem head-on by adding a second agent that *does not generate natural language*. A **Mutator** policy emits a tuple `(operator, target_line, replacement_index)` over a small categorical action space — there is no free-form Python to malform. The Tester (current MutantHunter agent) writes pytest as before. The Mutator is rewarded by *learnability* — `4·p·(1 − p)` where `p` is the empirical kill rate of its mutation under the current Tester — so it gravitates toward mutations on the frontier of what the Tester can almost-but-not-quite catch. The two policies update in alternating GRPO rounds, and the curriculum becomes endogenous: as the Tester improves, the Mutator follows the productive-struggle frontier. The formulation borrows from *Absolute Zero* (AZR) and *R-Zero* (DeepSeek). Phase 2 also keeps the existing no-regression gate, parsimony, and coverage components on the Tester side, so all 15 reward-hack defenses transfer for free.
+
+## Limitations
+
+The corpus is four libraries. It was sized to make `/reset` fast and to keep the mutation engine fully deterministic, not to be a benchmark. Generalization to large real-world repos with cross-module mutants is unverified. Phase 1's training pipeline failed for the reasons documented above — we publish the env, the eval, and the findings, but not a trained checkpoint. The mutation engine is single-mutant per episode; mutation-coupling effects are out of scope. We have not yet measured how much of the Tester's signal generalizes across libraries versus how much is per-library memorization.
+
+## Closing
+
+- **Repo**: <https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter>
+- **HF Space (env)**: hosts the MutantHunter OpenEnv server — see Space metadata in `README.md`
+- **HF Hub (dataset)**: corpus + per-module precomputed baselines
+- **HF Hub (model)**: zero-shot eval logs for Qwen2.5-Coder-7B; no trained checkpoint published
+- **W&B run**: 80-step GRPO run with full reward decomposition
+
+Mutation testing is an RL reward we already had; we just had not been wiring it up. The env, defenses, and zero-shot evidence in this Phase 1 are reusable for anyone working on verified-reward RL for code. The training story is unfinished, and that part is the next chapter.

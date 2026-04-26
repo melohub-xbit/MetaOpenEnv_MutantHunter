@@ -1,0 +1,255 @@
+{
+  "summary": {
+    "mean_reward": 0.0,
+    "median_reward": 0.0,
+    "std_reward": 0.0,
+    "min_reward": 0.0,
+    "max_reward": 0.0,
+    "n_episodes": 15,
+    "fraction_above_0_3": 0.0,
+    "fraction_format_zero": 1.0,
+    "fraction_gate_fired": 0.0
+  },
+  "episodes": [
+    {
+      "seed": 0,
+      "repo": "bloom_filter_lite",
+      "module": "bloom_filter_lite.bloom",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 1,
+      "repo": "csv_normalizer",
+      "module": "csv_normalizer.normalizer",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.1333333333333333,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 2,
+      "repo": "mini_calendar",
+      "module": "mini_calendar.parser",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 3,
+      "repo": "csv_normalizer",
+      "module": "csv_normalizer.normalizer",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.1333333333333333,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 4,
+      "repo": "csv_normalizer",
+      "module": "csv_normalizer.normalizer",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.1333333333333333,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 5,
+      "repo": "interval_tree",
+      "module": "interval_tree.tree",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 6,
+      "repo": "mini_calendar",
+      "module": "mini_calendar.parser",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 7,
+      "repo": "interval_tree",
+      "module": "interval_tree.tree",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 8,
+      "repo": "csv_normalizer",
+      "module": "csv_normalizer.normalizer",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.1333333333333333,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 9,
+      "repo": "bloom_filter_lite",
+      "module": "bloom_filter_lite.bloom",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 10,
+      "repo": "mini_calendar",
+      "module": "mini_calendar.parser",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 11,
+      "repo": "bloom_filter_lite",
+      "module": "bloom_filter_lite.bloom",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 12,
+      "repo": "bloom_filter_lite",
+      "module": "bloom_filter_lite.bloom",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 13,
+      "repo": "interval_tree",
+      "module": "interval_tree.tree",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    },
+    {
+      "seed": 14,
+      "repo": "mini_calendar",
+      "module": "mini_calendar.parser",
+      "total_reward": 0.0,
+      "final_reward": 0.0,
+      "components": {
+        "mutation_kill": 0.0,
+        "coverage_delta": 0.0,
+        "format": 0.0,
+        "parsimony": 0.0,
+        "no_regression_gate": 0.0
+      },
+      "no_regression_gate": 0.0,
+      "episode_length": 1
+    }
+  ]
+}
