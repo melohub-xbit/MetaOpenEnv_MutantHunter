@@ -50,7 +50,10 @@ pip install --no-cache-dir -e ".[training]"
 pip install --no-cache-dir bitsandbytes wandb
 
 python -c "from huggingface_hub import login; login(token='${HF_TOKEN}')"
-python -c "import os; os.environ['HOME']='/tmp'; import wandb; wandb.login(key='${WANDB_API_KEY}')"
+# wandb login: verify the secret reached the container, then use the CLI
+# (more resilient across wandb versions than wandb.login(key=...)).
+test -n "${WANDB_API_KEY:-}" || { echo "ERROR: WANDB_API_KEY env var is empty in container" >&2; exit 1; }
+HOME=/tmp wandb login --relogin "${WANDB_API_KEY}"
 
 python - <<'PY'
 from huggingface_hub import HfApi
