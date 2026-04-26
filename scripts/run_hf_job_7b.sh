@@ -37,7 +37,7 @@ PY
 }
 trap push_partial ERR
 
-echo "=== Phase 0: setup (clean install) ==="
+echo "=== Phase 0: setup (fresh venv) ==="
 cd /tmp
 if [ ! -d MetaOpenEnv_MutantHunter ]; then
     git clone https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter.git
@@ -45,9 +45,47 @@ fi
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
+# Build a fresh venv to escape the base image's pre-installed conda env.
+# That env ships torch==2.5.1 / torchvision==0.20.1 / torchaudio==2.5.1
+# already-satisfied, so plain `pip install torch ...` becomes a no-op and
+# we get stuck on the old versions. An empty venv has nothing to be confused
+# about — every wheel below is installed clean.
+python -m venv /tmp/venv
+export PATH="/tmp/venv/bin:${PATH}"
+export VIRTUAL_ENV=/tmp/venv
+python -m pip install --no-cache-dir --upgrade pip
+
+# Install huggingface_hub up front so the ERR trap can always upload partial
+# artifacts, even if a later step fails before training extras are installed.
+pip install --no-cache-dir huggingface_hub
+
+# Poll the CUDA driver via libcuda directly (no torch yet). Right after
+# container boot cuInit returns 802 ("system not yet initialized") for a few
+# seconds. Wait up to ~120s before giving up.
+python - <<'PY'
+import ctypes, sys, time
+last_rc = None
+for attempt in range(30):
+    try:
+        cuda = ctypes.CDLL("libcuda.so.1")
+    except OSError as e:
+        print(f"  attempt {attempt+1}/30: libcuda not loadable ({e}), sleeping 4s ...", flush=True)
+        time.sleep(4)
+        continue
+    rc = cuda.cuInit(0)
+    last_rc = rc
+    if rc == 0:
+        n = ctypes.c_int()
+        if cuda.cuDeviceGetCount(ctypes.byref(n)) == 0 and n.value > 0:
+            print(f"CUDA driver ready: {n.value} device(s) after {attempt+1} polls")
+            sys.exit(0)
+    print(f"  attempt {attempt+1}/30: cuInit rc={rc}, sleeping 4s ...", flush=True)
+    time.sleep(4)
+print(f"ERROR: CUDA driver still not ready after ~120s (last cuInit rc={last_rc})", file=sys.stderr)
+sys.exit(1)
+PY
+
 # Install torch + torchvision + torchaudio together from official cu124 wheels
-# (must move as a set: torchaudio in the base image pins torch==2.5.1, and
-# pip will not upgrade it on its own → "torchaudio requires torch==X" conflict)
 pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # Verify torch + torchvision import without ABI errors
