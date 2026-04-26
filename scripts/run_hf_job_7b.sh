@@ -71,6 +71,10 @@ print("ERROR: CUDA still not available after ~60s of polling", file=sys.stderr)
 sys.exit(1)
 PY
 
+# Upgrade torch to 2.5+ to satisfy TRL 0.14+ (FSDPModule requirement)
+pip install --no-cache-dir --upgrade 'torch>=2.5,<2.7' --index-url https://download.pytorch.org/whl/cu124
+python -c "import torch; assert torch.__version__.startswith(('2.5','2.6')), f'torch is {torch.__version__}, need 2.5+'; print(f'torch upgraded to {torch.__version__}, CUDA {torch.version.cuda}')"
+
 pip install --no-cache-dir -e ".[training]"
 pip install --no-cache-dir bitsandbytes wandb
 
@@ -88,14 +92,15 @@ api.create_repo("jester1177/mutant-hunter-results", repo_type="dataset", exist_o
 print("repos ready")
 PY
 
-echo "=== Phase 1: heuristic baseline (~5 min) ==="
-python training/baseline_eval.py \
-    --episodes 15 \
-    --policy mutation_aware \
-    --seed-start 0 \
-    --out "${RESULTS_DIR}/baseline_heuristic.json"
+if [ -z "${SKIP_BASELINES:-}" ]; then
+    echo "=== Phase 1: heuristic baseline (~5 min) ==="
+    python training/baseline_eval.py \
+        --episodes 15 \
+        --policy mutation_aware \
+        --seed-start 0 \
+        --out "${RESULTS_DIR}/baseline_heuristic.json"
 
-python - <<'PY'
+    python - <<'PY'
 from huggingface_hub import upload_file
 upload_file(
     path_or_fileobj="/tmp/results/baseline_heuristic.json",
@@ -106,17 +111,17 @@ upload_file(
 print("baseline_heuristic.json pushed")
 PY
 
-echo "=== Phase 2: zero-shot LLM baseline (~30 min) ==="
-python evaluation/zero_shot_distribution.py \
-    --episodes 15 \
-    --model Qwen/Qwen2.5-Coder-7B-Instruct \
-    --max-new-tokens 1024 \
-    --seed-start 0 \
-    --device auto
+    echo "=== Phase 2: zero-shot LLM baseline (~30 min) ==="
+    python evaluation/zero_shot_distribution.py \
+        --episodes 15 \
+        --model Qwen/Qwen2.5-Coder-7B-Instruct \
+        --max-new-tokens 1024 \
+        --seed-start 0 \
+        --device auto
 
-cp evaluation/_results/zero_shot_distribution.json "${RESULTS_DIR}/baseline_zeroshot.json"
+    cp evaluation/_results/zero_shot_distribution.json "${RESULTS_DIR}/baseline_zeroshot.json"
 
-python - <<'PY'
+    python - <<'PY'
 from huggingface_hub import upload_file
 upload_file(
     path_or_fileobj="/tmp/results/baseline_zeroshot.json",
@@ -126,6 +131,18 @@ upload_file(
 )
 print("baseline_zeroshot.json pushed")
 PY
+else
+    echo "=== Skipping Phase 1 and Phase 2 (SKIP_BASELINES set) ==="
+    echo "Downloading baseline JSONs from HF Hub..."
+    python - <<'PY'
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id="jester1177/mutant-hunter-results", filename="baseline_heuristic.json",
+                repo_type="dataset", local_dir="/tmp/results")
+hf_hub_download(repo_id="jester1177/mutant-hunter-results", filename="baseline_zeroshot.json",
+                repo_type="dataset", local_dir="/tmp/results")
+print("Baselines downloaded from HF Hub")
+PY
+fi
 
 echo "=== Phase 3: 200-step GRPO training (~4h) ==="
 python training/train_grpo.py \

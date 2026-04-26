@@ -46,13 +46,11 @@ dependencies = [
 
 [project.optional-dependencies]
 training = [
-    "torch>=2.5",
-    "transformers>=4.46",
-    "trl>=0.27",
-    "accelerate>=1.1",
-    "peft>=0.13",
-    "datasets>=3.0",
-    "wandb>=0.18",
+    "trl>=0.14,<0.18",
+    "transformers>=4.45,<4.50",
+    "peft>=0.13,<0.16",
+    "accelerate>=1.0,<1.4",
+    "datasets>=3.0,<5.0",
 ]
 unsloth = [
     "unsloth>=2024.12",
