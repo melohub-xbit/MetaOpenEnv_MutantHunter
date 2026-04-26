@@ -193,6 +193,7 @@ def _generate_completion(model, tokenizer, prompt: str, device: str,
 def run_episode_with_retries(
     *,
     env,
+    seed: int,
     base_prompt: str,
     model,
     tokenizer,
@@ -203,7 +204,13 @@ def run_episode_with_retries(
     """Generate, validate, submit, retry. Returns a dict with keys:
     test_code, full_completion, reward, components, no_regression_gate,
     retries_used, error_history, status, gen_elapsed_s, env_eval_elapsed_s.
-    The env has already been reset for the current episode by the caller."""
+
+    Each call to ``env.step()`` consumes the episode (the env terminates
+    after a single submit_tests action), so we re-reset with the same
+    deterministic ``seed`` before every step. This means a single retry
+    attempt that gets as far as the env step is the equivalent of one full
+    episode evaluation — same source, same surviving mutants, same
+    coverage baseline."""
     error_history: list[tuple[str, str]] = []
     last_full_completion = ""
     last_test_code = ""
@@ -251,6 +258,10 @@ def run_episode_with_retries(
                 last_gate = 0.0
             continue
 
+        # Re-reset with the same seed so the env is in a fresh non-terminated
+        # state. The first attempt's reset (done by the caller) is consumed
+        # by the first step; subsequent retry attempts need their own reset.
+        env.reset(seed=seed)
         t1 = time.time()
         obs2 = env.step(action)
         total_eval += time.time() - t1
@@ -448,6 +459,7 @@ def main() -> int:
 
             result = run_episode_with_retries(
                 env=env,
+                seed=seed,
                 base_prompt=prompt,
                 model=model,
                 tokenizer=tokenizer,
