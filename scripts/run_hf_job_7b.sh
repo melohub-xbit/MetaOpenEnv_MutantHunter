@@ -198,6 +198,7 @@ python training/train_grpo.py \
     --max-new-tokens 1024 \
     --learning-rate 5e-6 \
     --seed 42 \
+    --no-unsloth \
     --output-dir "${RESULTS_DIR}/training" \
     --wandb-project mutant-hunter-final
 
