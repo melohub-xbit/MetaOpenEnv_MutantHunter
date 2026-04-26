@@ -71,9 +71,14 @@ print("ERROR: CUDA still not available after ~60s of polling", file=sys.stderr)
 sys.exit(1)
 PY
 
-# Upgrade torch to 2.5+ to satisfy TRL 0.14+ (FSDPModule requirement)
-pip install --no-cache-dir --upgrade 'torch>=2.5,<2.7' --index-url https://download.pytorch.org/whl/cu124
-python -c "import torch; assert torch.__version__.startswith(('2.5','2.6')), f'torch is {torch.__version__}, need 2.5+'; print(f'torch upgraded to {torch.__version__}, CUDA {torch.version.cuda}')"
+# Upgrade torch to 2.5+ to satisfy TRL 0.14+ (FSDPModule requirement).
+# torchvision MUST be upgraded in the same step or its compiled ops (e.g.
+# torchvision::nms) won't register against the new torch and transformers
+# will fail to import. torchaudio is upgraded for the same reason.
+pip install --no-cache-dir --upgrade \
+    'torch>=2.5,<2.7' 'torchvision>=0.20,<0.22' 'torchaudio>=2.5,<2.7' \
+    --index-url https://download.pytorch.org/whl/cu124
+python -c "import torch, torchvision; assert torch.__version__.startswith(('2.5','2.6')), f'torch is {torch.__version__}, need 2.5+'; print(f'torch {torch.__version__} / torchvision {torchvision.__version__} / CUDA {torch.version.cuda}'); import torchvision.ops; torchvision.ops.nms.__doc__ and print('torchvision::nms registered OK')"
 
 pip install --no-cache-dir -e ".[training]"
 pip install --no-cache-dir bitsandbytes wandb
