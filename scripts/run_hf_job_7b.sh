@@ -45,8 +45,10 @@ fi
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
-# Install torch + torchvision together from official cu124 wheels (consistent ABI)
-pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# Install torch + torchvision + torchaudio together from official cu124 wheels
+# (must move as a set: torchaudio in the base image pins torch==2.5.1, and
+# pip will not upgrade it on its own → "torchaudio requires torch==X" conflict)
+pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
 # Verify torch + torchvision import without ABI errors
 python -c "
