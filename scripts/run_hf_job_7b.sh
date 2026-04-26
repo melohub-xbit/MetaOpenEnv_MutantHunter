@@ -45,7 +45,32 @@ fi
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
-python -c "import torch; assert torch.cuda.is_available(), 'No CUDA available in base image'; print(f'Using pre-installed torch {torch.__version__}, CUDA {torch.version.cuda}')"
+# Install huggingface_hub up front so the ERR trap can always upload partial
+# artifacts, even if a later step fails before training extras are installed.
+pip install --no-cache-dir huggingface_hub
+
+# CUDA driver may report error 802 ("system not yet initialized") for a few
+# seconds after container boot. Poll for up to ~60s before giving up.
+python - <<'PY'
+import sys, time
+import torch
+last_err = None
+for attempt in range(15):
+    try:
+        if torch.cuda.is_available():
+            print(f"Using pre-installed torch {torch.__version__}, "
+                  f"CUDA {torch.version.cuda}, devices={torch.cuda.device_count()}")
+            sys.exit(0)
+    except Exception as e:
+        last_err = e
+    print(f"  attempt {attempt+1}/15: CUDA not ready yet"
+          + (f" ({last_err})" if last_err else "")
+          + ", sleeping 4s ...", flush=True)
+    time.sleep(4)
+print("ERROR: CUDA still not available after ~60s of polling", file=sys.stderr)
+sys.exit(1)
+PY
+
 pip install --no-cache-dir -e ".[training]"
 pip install --no-cache-dir bitsandbytes wandb
 
