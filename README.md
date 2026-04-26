@@ -125,6 +125,8 @@ The training run shows flat reward curves across 80 GRPO steps. We investigated 
 
 Lowering the temperature to 0.7 did not resolve this. The fundamental issue is that small-to-mid coder models struggle to maintain valid pytest format under stochastic rollout sampling, even when zero-shot greedy generation produces correct output. This is consistent with known difficulties of RL'ing code-generation models without warm-start SFT.
 
+We also tested whether in-context demonstrations of good/bad tests would lift zero-shot performance. Result: it hurt slightly (mean 0.17 → 0.10) and confused the model into producing malformed pytest in 27% of episodes. This suggests Phase 1 small-coder limitations are deeper than prompt-level fixes can reach — motivating Phase 2's structured Mutator self-play approach.
+
 Despite the training no-op, we validated:
 - **Zero-shot 7B has real signal**: 27% of episodes score above 0.3 mean reward, with consistent successes on `bloom_filter_lite` (0.27) and `mini_calendar` (0.37).
 - **The reward function is correctly hard**: heuristic baselines score 0.0, validating the env is not gameable.
