@@ -46,7 +46,7 @@ cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
 # Install torch + torchvision together from official cu124 wheels (consistent ABI)
-pip install --no-cache-dir 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cu124
+pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
 # Verify torch + torchvision import without ABI errors
 python -c "
