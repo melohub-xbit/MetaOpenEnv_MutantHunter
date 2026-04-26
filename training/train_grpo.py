@@ -61,6 +61,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+# Repo root on sys.path so `from training.prompts import ...` works when this
+# file is run as a script (python training/train_grpo.py) and not just as a
+# module (python -m training.train_grpo).
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from mutant_hunter.corpus import dotted_to_workspace_relpath, repo_dir  # noqa: E402
 from mutant_hunter.models import Action, Observation  # noqa: E402
