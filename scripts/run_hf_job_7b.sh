@@ -37,7 +37,7 @@ PY
 }
 trap push_partial ERR
 
-echo "=== Phase 0: setup (fresh venv) ==="
+echo "=== Phase 0: setup (force-reinstall over base image) ==="
 cd /tmp
 if [ ! -d MetaOpenEnv_MutantHunter ]; then
     git clone https://github.com/melohub-xbit/MetaOpenEnv_MutantHunter.git
@@ -45,21 +45,11 @@ fi
 cd MetaOpenEnv_MutantHunter
 mkdir -p "${RESULTS_DIR}" "${RESULTS_DIR}/training" "${RESULTS_DIR}/plots"
 
-# Build a fresh venv to escape the base image's pre-installed conda env.
-# That env ships torch==2.5.1 / torchvision==0.20.1 / torchaudio==2.5.1
-# already-satisfied, so plain `pip install torch ...` becomes a no-op and
-# we get stuck on the old versions. An empty venv has nothing to be confused
-# about — every wheel below is installed clean.
-python -m venv /tmp/venv
-export PATH="/tmp/venv/bin:${PATH}"
-export VIRTUAL_ENV=/tmp/venv
-python -m pip install --no-cache-dir --upgrade pip
-
 # Install huggingface_hub up front so the ERR trap can always upload partial
 # artifacts, even if a later step fails before training extras are installed.
 pip install --no-cache-dir huggingface_hub
 
-# Poll the CUDA driver via libcuda directly (no torch yet). Right after
+# Poll the CUDA driver via libcuda directly (no torch needed yet). Right after
 # container boot cuInit returns 802 ("system not yet initialized") for a few
 # seconds. Wait up to ~120s before giving up.
 python - <<'PY'
@@ -85,14 +75,22 @@ print(f"ERROR: CUDA driver still not ready after ~120s (last cuInit rc={last_rc}
 sys.exit(1)
 PY
 
-# Install torch + torchvision + torchaudio together from official cu124 wheels
-pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Force-replace the base image's pre-installed torch 2.5.1 / torchvision 0.20.1
+# / torchaudio 2.5.1 with the latest cu124 wheels. --upgrade alone won't move
+# torchaudio (it pins torch==2.5.1), and --no-deps would skip the matched
+# triton/cusparselt bumps. --force-reinstall guarantees the wheels are
+# overwritten regardless of "already satisfied".
+pip install --no-cache-dir --upgrade --force-reinstall \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# Verify torch + torchvision import without ABI errors
+# Verify torch is actually upgraded past 2.6 (TRL 1.x needs FSDPModule which
+# only landed in torch 2.6) and CUDA still works after the swap
 python -c "
-import torch
-import torchvision
+import torch, torchvision
 from torchvision import io as _io
+from torch.distributed.fsdp import FSDPModule  # smoke-test the import that bit us
+maj, min_ = (int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
+assert (maj, min_) >= (2, 6), f'torch is {torch.__version__}, need >=2.6 for FSDPModule (TRL)'
 print(f'torch={torch.__version__}, torchvision={torchvision.__version__}, CUDA={torch.cuda.is_available()}')
 assert torch.cuda.is_available(), 'No CUDA'
 "
