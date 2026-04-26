@@ -1,0 +1,137 @@
+{
+  "bloom_filter_lite": {
+    "module": "bloom_filter_lite.bloom",
+    "zero_shot_good_seeds": [
+      0,
+      9,
+      11,
+      12
+    ],
+    "zero_shot_bad_seeds": [],
+    "good": [
+      {
+        "name": "mutation_killers_only",
+        "code": "from bloom_filter_lite.bloom import (\n    BloomFilter, BloomFilterError, optimal_parameters,\n)\ndef test_optimal_parameters_zero_capacity_raises():\n    import pytest\n    with pytest.raises(BloomFilterError):\n        optimal_parameters(0, 0.01)\n\ndef test_optimal_parameters_error_rate_one_raises():\n    import pytest\n    with pytest.raises(BloomFilterError):\n        optimal_parameters(100, 1.0)\n\ndef test_no_false_negatives_under_load():\n    bf = BloomFilter(capacity=200, error_rate=0.01)\n    items = [f'item-{i}' for i in range(50)]\n    for x in items:\n        bf.add(x)\n    for x in items:\n        assert x in bf\n\ndef test_clear_resets_count_and_bits():\n    bf = BloomFilter(capacity=100, error_rate=0.01)\n    bf.add('x')\n    bf.add('y')\n    bf.clear()\n    assert len(bf) == 0\n    assert bf.saturation == 0.0\n\ndef test_merge_shape_mismatch_raises():\n    import pytest\n    a = BloomFilter(capacity=100, error_rate=0.01)\n    b = BloomFilter(capacity=200, error_rate=0.01)\n    with pytest.raises(BloomFilterError):\n        a.merge(b)\n"
+      },
+      {
+        "name": "existing_suite_trimmed",
+        "code": "\"\"\"Existing test suite for ``bloom_filter_lite.bloom``.\n\nDELIBERATELY WEAK. Mutation-testing target \u2014 the suite below covers only\ndirect happy paths and skips, among other things:\n\n    * Off-by-one bounds on ``capacity`` and ``error_rate`` validation.\n    * The \"no false negatives\" invariant under many inserts.\n    * Saturation / FPR estimates after a known number of inserts.\n    * Insertion-count semantics (duplicates are still counted).\n    * ``merge`` shape-mismatch error paths and ``other`` type checks.\n    * ``copy`` independence (mutating a copy must not affect the original).\n    * ``clear`` resetting bits AND count.\n    * ``optimal_parameters`` rounding behaviour at very small / large inputs.\n    * Bytes / int / bool / str encoding consistency in :func:`_encode`.\n\"\"\"\n\nfrom bloom_filter_lite.bloom import (\n    BloomFilter,\n    BloomFilterError,\n    optimal_parameters,\n)\n\n\ndef test_optimal_parameters_returns_two_positive_ints():\n    m, k = optimal_parameters(1000, 0.01)\n    assert isinstance(m, int)\n    assert isinstance(k, int)\n    assert m > 0\n    assert k > 0\n\n\ndef test_add_then_contains_true():\n    bf = BloomFilter(capacity=100, error_rate=0.01)\n    bf.add(\"hello\")\n    assert \"hello\" in bf\n"
+      }
+    ],
+    "bad": [
+      {
+        "name": "empty_test",
+        "code": "from bloom_filter_lite.bloom import BloomFilter\n\ndef test_nothing():\n    pass\n"
+      },
+      {
+        "name": "vacuous_assert",
+        "code": "from bloom_filter_lite.bloom import BloomFilter\n\ndef test_bloom_works():\n    assert True\n\ndef test_bloom_again():\n    bf = BloomFilter(capacity=100, error_rate=0.01)\n    assert bf is not None\n"
+      },
+      {
+        "name": "broken_import",
+        "code": "from bloom_filter_lite.bloom import NonExistentClass\n\ndef test_broken():\n    obj = NonExistentClass()\n    assert obj is not None\n"
+      }
+    ]
+  },
+  "mini_calendar": {
+    "module": "mini_calendar.parser",
+    "zero_shot_good_seeds": [
+      2,
+      6,
+      10,
+      14
+    ],
+    "zero_shot_bad_seeds": [],
+    "good": [
+      {
+        "name": "mutation_killers_only",
+        "code": "from mini_calendar.parser import (\n    is_leap_year, days_in_month, parse_iso_date,\n)\ndef test_is_leap_year_1900_is_false():\n    assert is_leap_year(1900) is False\n\ndef test_is_leap_year_2000_is_true():\n    assert is_leap_year(2000) is True\n\ndef test_days_in_february_leap_is_29():\n    assert days_in_month(2024, 2) == 29\n\ndef test_days_in_month_zero_raises_value_error():\n    import pytest\n    with pytest.raises(ValueError):\n        days_in_month(2024, 0)\n\ndef test_days_in_month_thirteen_raises_value_error():\n    import pytest\n    with pytest.raises(ValueError):\n        days_in_month(2024, 13)\n\ndef test_parse_iso_date_returns_tuple():\n    result = parse_iso_date('2024-02-29')\n    assert result == (2024, 2, 29)\n    assert isinstance(result, tuple)\n"
+      },
+      {
+        "name": "existing_suite_trimmed",
+        "code": "\"\"\"Existing test suite for ``mini_calendar.parser``.\n\nDELIBERATELY WEAK. This is a mutation-testing target: the entire purpose of\nthe suite below is to leave plenty of surviving mutants for an RL agent to\ncatch by writing additional tests. It covers only happy paths on a handful\nof mid-month dates and skips:\n\n    * Leap-year century rules (1900, 2000) and February 29.\n    * Month / year rollovers in :func:`add_days`.\n    * Negative or zero ``delta``.\n    * Off-by-one bounds on month and ordinal validation.\n    * Business-day rollover across weekends.\n    * ISO week numbers at year boundaries (Dec 28-31 / Jan 1-3).\n    * Inverse properties (``parse_iso_date(format_iso(d)) == d``, etc.).\n    * Error paths.\n\"\"\"\n\nfrom mini_calendar.parser import (\n    add_days,\n    business_days_between,\n    date_diff,\n    day_of_week,\n    days_in_month,\n    format_iso,\n    is_business_day,\n    is_leap_year,\n    is_weekend,\n    iso_week_number,\n    next_business_day,\n    ordinal_day,\n    parse_iso_date,\n    weekday_name,\n)\n\n\ndef test_parse_iso_date_basic():\n    assert parse_iso_date(\"2024-06-15\") == (2024, 6, 15)\n\n\ndef test_format_iso_basic():\n    assert format_iso(2024, 6, 15) == \"2024-06-15\"\n\n\ndef test_is_leap_year_2024():\n    assert is_leap_year(2024) is True\n\n\ndef test_is_leap_year_2023():\n    assert is_leap_year(2023) is False\n"
+      }
+    ],
+    "bad": [
+      {
+        "name": "empty_test",
+        "code": "from mini_calendar.parser import is_leap_year\n\ndef test_nothing():\n    pass\n"
+      },
+      {
+        "name": "wrong_exception_type",
+        "code": "import pytest\nfrom mini_calendar.parser import days_in_month\n\ndef test_days_in_month_bad_month_raises_runtime_error():\n    with pytest.raises(RuntimeError):\n        days_in_month(2024, 0)\n"
+      },
+      {
+        "name": "vacuous_assert",
+        "code": "from mini_calendar.parser import is_leap_year\n\ndef test_leap_year_returns_something():\n    result = is_leap_year(2024)\n    assert result is not None\n"
+      }
+    ]
+  },
+  "csv_normalizer": {
+    "module": "csv_normalizer.normalizer",
+    "zero_shot_good_seeds": [],
+    "zero_shot_bad_seeds": [
+      1,
+      3,
+      4,
+      8
+    ],
+    "good": [
+      {
+        "name": "mutation_killers_only",
+        "code": "from csv_normalizer.normalizer import (\n    coerce_value, is_numeric, normalize_header, parse_row,\n)\ndef test_normalize_header_collapses_runs():\n    assert normalize_header('A  B__C') == 'a_b_c'\n\ndef test_normalize_header_strips_trailing_underscore():\n    assert normalize_header('hello!') == 'hello'\n\ndef test_normalize_header_empty_returns_col():\n    assert normalize_header('!!!') == 'col'\n\ndef test_coerce_value_false_literal():\n    assert coerce_value('false') is False\n\ndef test_coerce_value_no_alias_is_false():\n    assert coerce_value('no') is False\n\ndef test_is_numeric_negative_int():\n    assert is_numeric('-7') is True\n\ndef test_parse_row_quoted_with_comma():\n    assert parse_row('\"a,b\",c') == ['a,b', 'c']\n"
+      },
+      {
+        "name": "existing_suite_trimmed",
+        "code": "\"\"\"Existing test suite for ``csv_normalizer.normalizer``.\n\nDELIBERATELY WEAK. This is a mutation-testing target: the suite below\ncovers only the most direct happy paths and skips, among other things:\n\n    * Quoted fields containing the delimiter (``\"a,b\",c``).\n    * Escaped double-quotes inside quoted fields (``\"\"`` \u2192 literal ``\"``).\n    * BOM-prefixed input round-tripping through :func:`parse_csv`.\n    * Empty input and whitespace-only input.\n    * Tab, semicolon, and pipe delimiters (auto-detection on each).\n    * Header de-duplication via the ``_2`` / ``_3`` suffix machinery.\n    * Padding short rows with ``None``.\n    * Rejecting rows that are wider than the header.\n    * Negative numbers, exponential floats, and ``NaN`` / ``Inf`` rejection\n      in :func:`coerce_value` / :func:`is_numeric`.\n    * Boolean ``False`` and the ``yes`` / ``no`` aliases.\n    * ``write_row`` quoting fields that contain delimiters, quotes, or\n      newlines, and the round-trip with :func:`parse_row`.\n    * Error paths (e.g. unterminated quoted field, multi-character\n      delimiter, ``\"`` as delimiter).\n\"\"\"\n\nfrom csv_normalizer.normalizer import (\n    coerce_value,\n    detect_delimiter,\n    is_numeric,\n    normalize_header,\n    parse_csv,\n    parse_row,\n    strip_bom,\n    write_csv,\n    write_row,\n)\n\n\ndef test_parse_row_simple():\n    assert parse_row(\"a,b,c\") == [\"a\", \"b\", \"c\"]\n"
+      }
+    ],
+    "bad": [
+      {
+        "name": "broken_import",
+        "code": "from csv_normalizer.normalizer import does_not_exist\n\ndef test_broken():\n    assert does_not_exist('x') == 'x'\n"
+      },
+      {
+        "name": "vacuous_assert",
+        "code": "from csv_normalizer.normalizer import parse_row\n\ndef test_parse_row_returns_truthy():\n    result = parse_row('a,b,c')\n    assert result\n"
+      },
+      {
+        "name": "wrong_expected_value",
+        "code": "from csv_normalizer.normalizer import normalize_header\n\ndef test_normalize_header_keeps_spaces():\n    assert normalize_header('First Name') == 'First Name'\n"
+      }
+    ]
+  },
+  "interval_tree": {
+    "module": "interval_tree.tree",
+    "zero_shot_good_seeds": [],
+    "zero_shot_bad_seeds": [
+      5,
+      7,
+      13
+    ],
+    "good": [
+      {
+        "name": "mutation_killers_only",
+        "code": "from interval_tree.tree import IntervalTree\ndef test_query_point_at_end_excluded():\n    t = IntervalTree()\n    t.add(1, 5, payload='A')\n    assert t.query_point(5) == []\n\ndef test_query_point_at_start_included():\n    t = IntervalTree()\n    t.add(1, 5, payload='A')\n    assert t.query_point(1) == [(1, 5, 'A')]\n\ndef test_touching_intervals_do_not_overlap():\n    t = IntervalTree()\n    t.add(1, 3)\n    assert t.overlaps(3, 5) is False\n\ndef test_zero_width_interval_rejected():\n    import pytest\n    from interval_tree.tree import IntervalError\n    t = IntervalTree()\n    with pytest.raises(IntervalError):\n        t.add(5, 5)\n\ndef test_start_after_end_rejected():\n    import pytest\n    from interval_tree.tree import IntervalError\n    t = IntervalTree()\n    with pytest.raises(IntervalError):\n        t.add(7, 3)\n"
+      },
+      {
+        "name": "existing_suite_trimmed",
+        "code": "\"\"\"Existing test suite for ``interval_tree.tree``.\n\nDELIBERATELY WEAK. Mutation-testing target \u2014 the suite below covers only\ndirect happy paths and skips, among other things:\n\n    * Half-open boundary semantics (``[1, 3)`` does NOT contain ``3``;\n      ``[1, 3)`` and ``[3, 5)`` do NOT overlap).\n    * Duplicate insertion and per-call single-removal of duplicates.\n    * Stable sort order across equal ``start`` keys.\n    * ``query_range`` boundary edges and zero-length query rejection.\n    * ``merge_overlapping`` of touching intervals (``[1, 3)`` + ``[3, 5)``).\n    * Payload preservation vs. payload dropping in ``merge_overlapping``.\n    * ``__contains__`` with the 3-tuple ``(start, end, payload)`` form\n      and with non-tuple inputs.\n    * ``IntervalError`` paths (e.g. ``start >= end``, zero-width).\n    * ``total_length`` and ``overlaps`` predicates.\n\"\"\"\n\nfrom interval_tree.tree import IntervalTree\n\n\ndef test_add_then_len():\n    t = IntervalTree()\n    t.add(1, 5)\n    t.add(10, 20)\n    assert len(t) == 2\n\n\ndef test_query_point_inside():\n    t = IntervalTree()\n    t.add(1, 5, payload=\"A\")\n    hits = t.query_point(3)\n    assert hits == [(1, 5, \"A\")]\n\n\ndef test_query_point_outside():\n    t = IntervalTree()\n    t.add(1, 5, payload=\"A\")\n    assert t.query_point(10) == []\n"
+      }
+    ],
+    "bad": [
+      {
+        "name": "empty_test",
+        "code": "from interval_tree.tree import IntervalTree\n\ndef test_nothing():\n    pass\n"
+      },
+      {
+        "name": "vacuous_assert",
+        "code": "from interval_tree.tree import IntervalTree\n\ndef test_tree_constructible():\n    t = IntervalTree()\n    assert t is not None\n"
+      },
+      {
+        "name": "wrong_boundary_assumption",
+        "code": "from interval_tree.tree import IntervalTree\n\ndef test_query_point_at_end_included():\n    t = IntervalTree()\n    t.add(1, 5, payload='A')\n    # WRONG: half-open [1, 5) does NOT contain 5.\n    assert t.query_point(5) == [(1, 5, 'A')]\n"
+      }
+    ]
+  }
+}

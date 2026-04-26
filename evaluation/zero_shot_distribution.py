@@ -35,6 +35,64 @@ from mutant_hunter.models import Action  # noqa: E402
 from mutant_hunter.server.mutant_hunter_environment import MutantHunterEnvironment  # noqa: E402
 from training.train_grpo import build_prompt  # noqa: E402
 
+# Anchor used to splice the demonstration block into the existing prompt.
+# `build_prompt` ends with this exact line; we insert the demo block right
+# before it so the user's task instruction stays the LAST thing the policy
+# sees.
+_TASK_ANCHOR = "## Output the pytest file content now:"
+_DEMO_BUDGET_CHARS = 4000
+
+
+def _format_examples(examples: list[dict], header: str, budget: int) -> tuple[str, int]:
+    lines = [header]
+    used = len(header) + 1
+    for i, ex in enumerate(examples, 1):
+        block = f"### Example {i} — {ex.get('name', '')}\n```python\n{ex['code'].rstrip()}\n```"
+        if used + len(block) + 2 > budget:
+            break
+        lines.append(block)
+        used += len(block) + 2
+    return "\n".join(lines), used
+
+
+def render_demonstrations(demos_for_lib: dict, budget: int = _DEMO_BUDGET_CHARS) -> str:
+    """Render GOOD/BAD demos into a single string, capped at ``budget`` chars.
+
+    Splits the budget 60/40 between good/bad so the policy always sees at
+    least one of each, even with verbose examples."""
+    good = list(demos_for_lib.get("good") or [])
+    bad = list(demos_for_lib.get("bad") or [])
+    good_budget = int(budget * 0.6)
+    bad_budget = budget - good_budget
+    parts: list[str] = ["## In-context demonstrations"]
+    if good:
+        good_str, _ = _format_examples(
+            good, "Here are examples of GOOD tests that catch bugs:", good_budget
+        )
+        parts.append(good_str)
+    if bad:
+        bad_str, _ = _format_examples(
+            bad, "Here are examples of BAD tests to AVOID:", bad_budget
+        )
+        parts.append(bad_str)
+    parts.append("Now write your tests, following the GOOD pattern (mirror exact "
+                 "behavior of the source — never guess return values or exception types).")
+    return "\n\n".join(parts)
+
+
+def build_prompt_with_demos(obs, demos: dict | None) -> str:
+    base = build_prompt(obs)
+    if not demos:
+        return base
+    repo = obs.repo_name
+    if repo not in demos:
+        return base
+    demo_block = render_demonstrations(demos[repo])
+    if _TASK_ANCHOR in base:
+        return base.replace(_TASK_ANCHOR, demo_block + "\n\n" + _TASK_ANCHOR)
+    # Fallback: append at end if anchor missing (build_prompt was changed).
+    return base + "\n\n" + demo_block
+
 RESULTS_DIR = ROOT / "evaluation" / "_results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -82,7 +140,26 @@ def main() -> int:
         default=None,
         help="If set, load a PEFT LoRA adapter from this path on top of --model.",
     )
+    ap.add_argument(
+        "--use-demonstrations",
+        type=str,
+        default=None,
+        help="Path to demonstrations.json (from training/mine_demonstrations.py). "
+             "When set, GOOD/BAD examples are spliced into each prompt after the "
+             "source code and before the task instruction, capped at "
+             f"{_DEMO_BUDGET_CHARS} chars.",
+    )
     args = ap.parse_args()
+
+    demos: dict | None = None
+    if args.use_demonstrations:
+        demo_path = Path(args.use_demonstrations)
+        if not demo_path.exists():
+            print(f"[layer6] FAIL — --use-demonstrations path not found: {demo_path}")
+            return 1
+        demos = json.loads(demo_path.read_text(encoding="utf-8"))
+        print(f"[layer6] loaded demonstrations for {list(demos.keys())} "
+              f"from {demo_path}", flush=True)
 
     try:
         import torch
@@ -132,7 +209,7 @@ def main() -> int:
         for i in range(args.episodes):
             seed = args.seed_start + i
             obs = env.reset(seed=seed)
-            prompt = build_prompt(obs)
+            prompt = build_prompt_with_demos(obs, demos)
 
             t0 = time.time()
             messages = [{"role": "user", "content": prompt}]
