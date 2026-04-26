@@ -195,20 +195,19 @@ HfApi().upload_folder(
 print("LoRA adapter pushed to model repo")
 PY
 
-if [ -f "${RESULTS_DIR}/training/training_log.jsonl" ]; then
-    python - <<'PY'
-from huggingface_hub import upload_file
-upload_file(
-    path_or_fileobj="/tmp/results/training/training_log.jsonl",
-    path_in_repo="training_log.jsonl",
-    repo_id="jester1177/mutant-hunter-qwen-coder-7b-lora",
-    repo_type="model",
-)
-print("training_log.jsonl pushed")
+# train_grpo.py reports to W&B but does not write a local training_log.jsonl,
+# so we resolve the run path from the project and feed that to make_plots.
+WANDB_RUN_PATH=$(HOME=/tmp python - <<'PY'
+import os, wandb
+api = wandb.Api()
+runs = api.runs(os.environ.get("WANDB_PROJECT", "mutant-hunter-final"),
+                order="-created_at", per_page=1)
+for r in runs:
+    print(f"{r.entity}/{r.project}/{r.id}")
+    break
 PY
-else
-    echo "[warn] training_log.jsonl not found; skipping upload"
-fi
+)
+echo "W&B run path: ${WANDB_RUN_PATH:-<none>}"
 
 # ==============================================================================
 # Phase 4: trained eval (~30 min)
@@ -242,11 +241,15 @@ PY
 # Phase 5: plots
 # ==============================================================================
 echo "=== Phase 5: plots ==="
-python evaluation/make_plots.py \
+if [ -z "${WANDB_RUN_PATH}" ]; then
+    echo "ERROR: no W&B run path resolved; cannot make plots" >&2
+    exit 1
+fi
+HOME=/tmp python evaluation/make_plots.py \
     --baseline-heuristic-json "${RESULTS_DIR}/baseline_heuristic.json" \
     --baseline-zeroshot-json "${RESULTS_DIR}/baseline_zeroshot.json" \
     --trained-eval-json "${RESULTS_DIR}/trained_eval.json" \
-    --training-log-json "${RESULTS_DIR}/training/training_log.jsonl" \
+    --wandb-run-path "${WANDB_RUN_PATH}" \
     --out-dir "${RESULTS_DIR}/plots/"
 
 python - <<'PY'

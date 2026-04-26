@@ -18,9 +18,11 @@ Inputs
   for the *untrained* model.
 * ``--trained-eval-json``        output of ``evaluation/zero_shot_distribution.py``
   re-run with ``--lora-path`` pointing at the trained adapter.
-* ``--wandb-run-path``           a W&B run path ``entity/project/run_id`` OR
-  a path to a local W&B run directory containing ``wandb-history.jsonl``
-  (or any ``.jsonl`` with one row per logged step).
+* ``--training-log-json``        local JSONL of per-step training metrics.
+  Used if the file exists; otherwise we fall back to ``--wandb-run-id``.
+* ``--wandb-run-id``             W&B run path ``entity/project/run_id``.
+  Used as the source of truth when ``--training-log-json`` is missing or not
+  provided. ``--wandb-run-path`` is kept as a deprecated alias.
 
 Run
 ---
@@ -29,7 +31,7 @@ Run
         --baseline-heuristic-json evaluation/_results/heuristic.json \
         --baseline-zeroshot-json  evaluation/_results/zero_shot_distribution.json \
         --trained-eval-json       evaluation/_results/trained_distribution.json \
-        --wandb-run-path          entity/mutant-hunter/abc123 \
+        --wandb-run-id            entity/mutant-hunter/abc123 \
         --out-dir plots/
 """
 
@@ -78,35 +80,35 @@ def _bar_metrics_from_eval(blob: dict[str, Any]) -> dict[str, float]:
     }
 
 
-def _load_wandb_history(spec: str) -> list[dict[str, Any]]:
-    """Return list of step-rows. Accepts a wandb run path or a local jsonl path."""
+def _load_local_jsonl(spec: str) -> list[dict[str, Any]]:
     p = Path(spec)
-    if p.exists():
-        if p.is_dir():
-            candidates = list(p.glob("wandb-history.jsonl")) + list(p.glob("*.jsonl"))
-            if not candidates:
-                raise FileNotFoundError(f"no .jsonl history under {p}")
-            p = candidates[0]
-        rows: list[dict[str, Any]] = []
-        with p.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        return rows
+    if p.is_dir():
+        candidates = list(p.glob("wandb-history.jsonl")) + list(p.glob("*.jsonl"))
+        if not candidates:
+            raise FileNotFoundError(f"no .jsonl history under {p}")
+        p = candidates[0]
+    rows: list[dict[str, Any]] = []
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
 
+
+def _load_wandb_run(run_id: str) -> list[dict[str, Any]]:
     try:
         import wandb  # type: ignore[import-not-found]
     except ImportError as exc:
         raise RuntimeError(
-            f"--wandb-run-path={spec!r} is not a local file and wandb is not installed: {exc}"
+            f"--wandb-run-id={run_id!r} given but wandb is not installed: {exc}"
         ) from exc
     api = wandb.Api()
-    run = api.run(spec)
+    run = api.run(run_id)
     return [dict(row) for row in run.scan_history()]
 
 
@@ -238,17 +240,24 @@ def main() -> int:
     ap.add_argument("--baseline-heuristic-json", type=Path, required=True)
     ap.add_argument("--baseline-zeroshot-json", type=Path, required=True)
     ap.add_argument("--trained-eval-json", type=Path, required=True)
-    ap.add_argument("--wandb-run-path", type=str, default=None,
-                    help="wandb 'entity/project/run_id' OR a local path to a wandb history .jsonl / run dir")
     ap.add_argument("--training-log-json", type=str, default=None,
-                    help="Local JSONL of per-step training metrics. Alias for --wandb-run-path "
-                         "when given a local file.")
+                    help="Local JSONL of per-step training metrics. Used if the file exists.")
+    ap.add_argument("--wandb-run-id", type=str, default=None,
+                    help="W&B run path 'entity/project/run_id'. Used when --training-log-json "
+                         "is missing or not provided.")
+    ap.add_argument("--wandb-run-path", type=str, default=None,
+                    help="Deprecated alias for --wandb-run-id.")
     ap.add_argument("--out-dir", type=Path, default=Path("plots"))
     args = ap.parse_args()
 
-    history_spec = args.wandb_run_path or args.training_log_json
-    if not history_spec:
-        ap.error("must provide either --wandb-run-path or --training-log-json")
+    wandb_run_id = args.wandb_run_id or args.wandb_run_path
+
+    if args.training_log_json and Path(args.training_log_json).exists():
+        history_loader = lambda: _load_local_jsonl(args.training_log_json)
+    elif wandb_run_id:
+        history_loader = lambda: _load_wandb_run(wandb_run_id)
+    else:
+        ap.error("must provide --training-log-json (existing file) or --wandb-run-id")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -256,7 +265,7 @@ def main() -> int:
     untrained = _bar_metrics_from_eval(_read_json(args.baseline_zeroshot_json))
     trained   = _bar_metrics_from_eval(_read_json(args.trained_eval_json))
 
-    history = _load_wandb_history(history_spec)
+    history = history_loader()
 
     _plot_reward_curve(history,           args.out_dir / "reward_curve.png")
     _plot_per_reward_breakdown(history,   args.out_dir / "per_reward_breakdown.png")
